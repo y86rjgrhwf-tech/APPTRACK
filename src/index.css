@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap');
 * {
   box-sizing: border-box;
   margin: 0;
@@ -53,7 +54,6 @@ body {
   }
 }
 
-@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap');
 @keyframes bounce-in {
   0%   { transform: scale(1); }
   40%  { transform: scale(1.18); }
