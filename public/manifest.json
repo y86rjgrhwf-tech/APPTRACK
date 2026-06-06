@@ -7,7 +7,7 @@
     "theme_color": "#080a0f",
     "icons": [
       {
-        "src": "/icon.png",
+        "src": "/APPTRACK-ICON.png",
         "sizes": "512x512",
         "type": "image/png"
       }
