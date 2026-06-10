@@ -73,3 +73,23 @@ export const AVAILABLE_ICONS = [
   { id: 'ti-pray',              label: 'Rezar' },
   { id: 'ti-yoga',              label: 'Yoga' },
 ]
+// Unit preference: 'kg' | 'lb'
+// The app stores all weights as-entered (no conversion).
+// The unit label is just a display preference.
+export function getUnit() {
+  return loadData('pref-unit', 'kg')
+}
+export function setUnit(u) {
+  saveData('pref-unit', u)
+}
+
+// Pure display converter — only used in the inline converter tool.
+// Does NOT affect stored values.
+export function convertWeight(val, from, to) {
+  if (from === to) return val
+  const n = parseFloat(val)
+  if (isNaN(n)) return ''
+  if (from === 'kg' && to === 'lb') return +(n * 2.20462).toFixed(1)
+  if (from === 'lb' && to === 'kg') return +(n / 2.20462).toFixed(1)
+  return val
+}

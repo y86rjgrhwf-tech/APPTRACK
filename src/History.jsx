@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { loadData, getHabits } from './store'
+import { loadData, getHabits, getUnit } from './store'
 
 const DAYS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado']
 const D7 = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
@@ -55,7 +55,7 @@ export default function History() {
 
   function shiftWeek(dir) {
     if (weekOffset + dir > 0) return
-    if (weekOffset + dir < 12) return
+    if (weekOffset + dir < -12) return
     const no = weekOffset + dir
     setWeekOffset(no)
     const newDays = Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(addDays(today, no * 7)), i))
@@ -229,7 +229,7 @@ export default function History() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                     {doneSets.map((set, j) => (
                       <span key={j} style={{ fontSize: 11, color: 'var(--t3)', background: 'var(--bg1)', border: '0.5px solid var(--line)', borderRadius: 5, padding: '2px 7px' }}>
-                        {set.reps && set.weight ? `${set.reps}×${set.weight}kg` : set.reps ? `${set.reps} reps` : `${set.weight}kg`}
+                        {set.reps && set.weight ? `${set.reps}×${set.weight}${getUnit()}` : set.reps ? `${set.reps} reps` : `${set.weight}${getUnit()}`}
                       </span>
                     ))}
                   </div>

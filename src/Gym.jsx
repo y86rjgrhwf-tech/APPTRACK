@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { loadData, saveData, todayKey } from './store'
+import { useState, useEffect } from 'react'
+import { loadData, saveData, todayKey, getUnit, setUnit, convertWeight } from './store'
 
 const DAYS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado']
 const MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
@@ -40,7 +40,9 @@ function emptySession(exercises) {
 }
 
 function SetSheet({ setNum, exName, set, onSave, onDelete, onClose }) {
+  const unit = getUnit()
   const [reps, setReps] = useState(set.reps || '')
+  // Weight is stored as-entered. No conversion on save — only label changes.
   const [weight, setWeight] = useState(set.weight || '')
 
   return (
@@ -78,7 +80,7 @@ function SetSheet({ setNum, exName, set, onSave, onDelete, onClose }) {
             />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>Peso kg</div>
+            <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>Peso ({unit})</div>
             <input
               type="number" inputMode="decimal"
               value={weight}
@@ -268,6 +270,41 @@ function Onboarding({ onDone }) {
   )
 }
 
+// Inline kg <-> lb converter widget shown in Gym header
+function WeightConverter() {
+  const [unit, setUnitState] = useState(() => getUnit())
+  const [val, setVal] = useState('')
+  const other = unit === 'kg' ? 'lb' : 'kg'
+  const converted = convertWeight(val, unit, other)
+
+  function switchUnit(u) { setUnit(u); setUnitState(u) }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 20px', borderBottom: '0.5px solid var(--line)', background: 'var(--bg1)', flexShrink: 0 }}>
+      {/* Unit toggle */}
+      <div style={{ display: 'flex', borderRadius: 7, overflow: 'hidden', border: '0.5px solid var(--line)', flexShrink: 0 }}>
+        {['kg', 'lb'].map(u => (
+          <div key={u} onClick={() => switchUnit(u)} style={{ padding: '5px 12px', fontSize: 11, fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', background: unit === u ? 'var(--accent)' : 'transparent', color: unit === u ? 'var(--fg)' : 'var(--t3)', fontWeight: unit === u ? 600 : 400 }}>
+            {u}
+          </div>
+        ))}
+      </div>
+      {/* Converter */}
+      <input
+        type="number" inputMode="decimal"
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        placeholder="0"
+        style={{ width: 72, padding: '5px 8px', borderRadius: 7, border: '0.5px solid var(--line)', background: 'var(--bg2)', fontFamily: 'DM Sans, sans-serif', fontSize: 13, color: 'var(--t1)', outline: 'none', textAlign: 'center', MozAppearance: 'textfield', WebkitAppearance: 'none' }}
+      />
+      <span style={{ fontSize: 11, color: 'var(--t3)', flexShrink: 0 }}>{unit} →</span>
+      <span style={{ fontSize: 14, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: val ? 'var(--accent)' : 'var(--t3)', minWidth: 48 }}>
+        {val ? `${converted} ${other}` : `— ${other}`}
+      </span>
+    </div>
+  )
+}
+
 export default function Gym() {
   const key = todayKey()
   const [workoutDays, setWorkoutDays] = useState(() => loadData('gym-days', null))
@@ -277,6 +314,17 @@ export default function Gym() {
   const [activeSheet, setActiveSheet] = useState(null)
   const [editingDay, setEditingDay] = useState(null)
   const now = new Date()
+
+  // Auto-initialize sessions for all days when workoutDays exist but no session saved today
+  useEffect(() => {
+    if (!workoutDays) return
+    const existing = loadData('gym-' + key, null)
+    if (existing) { setSessions(existing); return }
+    const newSessions = {}
+    workoutDays.forEach(day => { newSessions[day.id] = emptySession(day.exercises) })
+    saveData('gym-' + key, newSessions)
+    setSessions(newSessions)
+  }, [workoutDays, key])
 
   function initWorkout(days) {
     saveData('gym-days', days)
@@ -288,9 +336,9 @@ export default function Gym() {
   }
 
   function getSession() {
-    if (!workoutDays || !sessions) return null
+    if (!workoutDays) return []
     const day = workoutDays[activeTab]
-    if (!sessions[day.id]) return emptySession(day.exercises)
+    if (!sessions || !sessions[day.id]) return emptySession(day.exercises)
     return sessions[day.id]
   }
 
@@ -385,6 +433,8 @@ export default function Gym() {
         </div>
       </div>
 
+      <WeightConverter />
+
       <div style={{ display: 'flex', gap: 6, padding: '10px 20px', borderBottom: '0.5px solid var(--line)', flexShrink: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch', maskImage: 'linear-gradient(to right, black 85%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, black 85%, transparent 100%)' }}>
         {workoutDays.map((day, i) => {
           // Find last time this workout was done
@@ -438,7 +488,7 @@ export default function Gym() {
                         <div style={{ fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Set {si + 1}</div>
                         {set.reps || set.weight
                           ? <div style={{ fontFamily: 'Lora, serif', fontSize: 13, color: set.done ? 'var(--accent)' : 'var(--t2)' }}>
-                              {set.reps && set.weight ? `${set.reps}×${set.weight}kg` : set.reps ? `${set.reps} reps` : `${set.weight}kg`}
+                              {set.reps && set.weight ? `${set.reps}×${set.weight}${getUnit()}` : set.reps ? `${set.reps} reps` : `${set.weight}${getUnit()}`}
                             </div>
                           : <div style={{ fontSize: 12, color: 'var(--t3)' }}>Tocar</div>
                         }
