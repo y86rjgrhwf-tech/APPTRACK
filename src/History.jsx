@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { loadData, getHabits, getUnit } from './store'
+import { loadData, saveData, getHabits, getUnit } from './store'
 
 const DAYS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado']
 const D7 = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
@@ -13,19 +13,161 @@ function startOfWeek(d) { const r = new Date(d); r.setDate(r.getDate() - ((r.get
 
 function scoreColor(ratio) {
   if (ratio === 0) return 'rgba(255,255,255,0.06)'
-  if (ratio <= 0.5) {
-    const t = ratio * 2
-    return `rgba(168,255,62,${0.3 + t * 0.4})`
-  }
+  if (ratio <= 0.5) { const t = ratio * 2; return `rgba(168,255,62,${0.3 + t * 0.4})` }
   return `rgba(168,255,62,${0.7 + (ratio - 0.5) * 0.6})`
 }
 
+function fmtSet(set, unit) {
+  if (set.reps && set.weight) return `${set.reps}×${set.weight}${unit}`
+  if (set.reps) return `${set.reps} reps`
+  if (set.weight) return `${set.weight}${unit}`
+  return '—'
+}
+
+// ── Edit set sheet (same as Gym but standalone) ───────────────────────────────
+function EditSetSheet({ setNum, exName, set, onSave, onDelete, onClose }) {
+  const unit = getUnit()
+  const [reps, setReps] = useState(set.reps || '')
+  const [weight, setWeight] = useState(set.weight || '')
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', zIndex: 400 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 430, margin: '0 auto', background: 'var(--bg1)', borderRadius: '20px 20px 0 0', borderTop: '0.5px solid var(--line)', padding: '16px 20px 40px' }}>
+        <div style={{ width: 36, height: 3, background: 'var(--line)', borderRadius: 2, margin: '0 auto 16px' }} />
+        <div style={{ fontFamily: 'Lora, serif', fontSize: 16, color: 'var(--t1)', marginBottom: 4, textAlign: 'center' }}>Set {setNum}</div>
+        <div style={{ fontSize: 11, color: 'var(--t3)', textAlign: 'center', marginBottom: 20, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{exName}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>Reps</div>
+            <input type="number" inputMode="numeric" value={reps} onChange={e => setReps(e.target.value)} autoFocus
+              style={{ background: 'var(--bg2)', border: `0.5px solid ${reps ? 'var(--accent)' : 'var(--line)'}`, borderRadius: 12, padding: '20px 8px', fontSize: 36, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: reps ? 'var(--accent)' : 'var(--t3)', textAlign: 'center', width: '100%', outline: 'none', MozAppearance: 'textfield', WebkitAppearance: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>Peso ({unit})</div>
+            <input type="number" inputMode="decimal" value={weight} onChange={e => setWeight(e.target.value)}
+              style={{ background: 'var(--bg2)', border: `0.5px solid ${weight ? 'var(--accent)' : 'var(--line)'}`, borderRadius: 12, padding: '20px 8px', fontSize: 36, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: weight ? 'var(--accent)' : 'var(--t3)', textAlign: 'center', width: '100%', outline: 'none', MozAppearance: 'textfield', WebkitAppearance: 'none' }}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onDelete} style={{ padding: '14px 16px', borderRadius: 12, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t3)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, cursor: 'pointer' }}>
+            <i className="ti ti-trash" />
+          </button>
+          <button onClick={() => onSave({ reps, weight, done: !!(reps || weight) })} style={{ flex: 1, padding: 14, borderRadius: 12, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+            Confirmar ✓
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Gym log editor (fullscreen modal) ─────────────────────────────────────────
+function GymEditModal({ dateKey, gymData, gymDayId, onSave, onDelete, onClose }) {
+  const unit = getUnit()
+  const [session, setSession] = useState(() => {
+    const exArr = gymData[gymDayId]
+    return Array.isArray(exArr) ? JSON.parse(JSON.stringify(exArr)) : []
+  })
+  const [editingSet, setEditingSet] = useState(null) // { exIdx, setIdx }
+
+  function updateSet(exIdx, setIdx, data) {
+    setSession(prev => prev.map((ex, i) => i !== exIdx ? ex : {
+      ...ex,
+      sets: ex.sets.map((s, j) => j !== setIdx ? s : { ...data })
+    }))
+    setEditingSet(null)
+  }
+
+  function deleteSet(exIdx, setIdx) {
+    setSession(prev => prev.map((ex, i) => i !== exIdx ? ex : {
+      ...ex,
+      sets: ex.sets.length <= 1 ? ex.sets.map((s, j) => j === setIdx ? { reps: '', weight: '', done: false } : s) : ex.sets.filter((_, j) => j !== setIdx)
+    }))
+    setEditingSet(null)
+  }
+
+  function handleSave() {
+    const updated = { ...gymData, [gymDayId]: session }
+    onSave(updated)
+  }
+
+  const date = new Date(dateKey + 'T12:00:00')
+  const dateLabel = DAYS[date.getDay()] + ' ' + date.getDate() + ' de ' + MONTHS[date.getMonth()] + ' ' + date.getFullYear()
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'var(--bg)', zIndex: 300, display: 'flex', flexDirection: 'column' }}>
+      {/* Header */}
+      <div style={{ padding: '12px 20px 14px', borderBottom: '0.5px solid var(--line)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t2)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+            <i className="ti ti-arrow-left" style={{ fontSize: 16 }} />
+          </button>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>{dateLabel}</div>
+            <div style={{ fontFamily: 'Lora, serif', fontSize: 18, color: 'var(--t1)' }}>Editar sesión</div>
+          </div>
+          <button
+            onClick={() => { if (window.confirm('¿Eliminar este workout? No se puede deshacer.')) onDelete() }}
+            style={{ padding: '6px 10px', borderRadius: 8, border: '0.5px solid rgba(192,57,43,0.3)', background: 'rgba(192,57,43,0.07)', color: '#c0392b', fontFamily: 'DM Sans, sans-serif', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+          >
+            <i className="ti ti-trash" style={{ fontSize: 13 }} /> Eliminar
+          </button>
+        </div>
+      </div>
+
+      {/* Exercise list */}
+      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '8px 20px 24px' }}>
+        {session.map((ex, ei) => (
+          <div key={ei} style={{ paddingBottom: 16, borderBottom: '0.5px solid var(--line2)', marginBottom: 4 }}>
+            <div style={{ fontFamily: 'Lora, serif', fontSize: 15, color: 'var(--t1)', padding: '12px 0 8px' }}>{ex.name}</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {(ex.sets || []).map((set, si) => (
+                <div key={si} onClick={() => setEditingSet({ exIdx: ei, setIdx: si })}
+                  style={{ flex: '1 1 60px', minWidth: 60, padding: '10px 6px', borderRadius: 10, textAlign: 'center', background: set.done ? 'var(--abg)' : 'var(--bg1)', border: `0.5px solid ${set.done ? 'var(--adim)' : 'var(--line)'}`, cursor: 'pointer', boxShadow: set.done ? '0 0 8px var(--adim)' : 'none' }}
+                >
+                  <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 3 }}>Set {si + 1}</div>
+                  {set.reps || set.weight
+                    ? <div style={{ fontFamily: 'Lora, serif', fontSize: 13, color: set.done ? 'var(--accent)' : 'var(--t2)' }}>{fmtSet(set, unit)}</div>
+                    : <div style={{ fontSize: 11, color: 'var(--t3)' }}>vacío</div>
+                  }
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Save */}
+      <div style={{ padding: '10px 20px 24px', borderTop: '0.5px solid var(--line2)', flexShrink: 0 }}>
+        <button onClick={handleSave} style={{ width: '100%', padding: 14, borderRadius: 12, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+          Guardar cambios
+        </button>
+      </div>
+
+      {editingSet && (
+        <EditSetSheet
+          setNum={editingSet.setIdx + 1}
+          exName={session[editingSet.exIdx]?.name}
+          set={session[editingSet.exIdx]?.sets[editingSet.setIdx] || {}}
+          onSave={data => updateSet(editingSet.exIdx, editingSet.setIdx, data)}
+          onDelete={() => deleteSet(editingSet.exIdx, editingSet.setIdx)}
+          onClose={() => setEditingSet(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Main History component ────────────────────────────────────────────────────
 export default function History() {
   const today = new Date()
   const todayKey = toKey(today)
   const [weekOffset, setWeekOffset] = useState(0)
   const [selectedKey, setSelectedKey] = useState(todayKey)
   const [gymOpen, setGymOpen] = useState(false)
+  const [editingGym, setEditingGym] = useState(false)
   const touchStartX = useRef(0)
   const mouseStartX = useRef(0)
   const mouseDown = useRef(false)
@@ -51,6 +193,7 @@ export default function History() {
     if (no !== weekOffset) setWeekOffset(no)
     setSelectedKey(toKey(newDay))
     setGymOpen(false)
+    setEditingGym(false)
   }
 
   function shiftWeek(dir) {
@@ -62,12 +205,14 @@ export default function History() {
     const candidate = newDays[dir < 0 ? 0 : 6]
     setSelectedKey(toKey(candidate > today ? today : candidate))
     setGymOpen(false)
+    setEditingGym(false)
   }
 
   function goToToday() {
     setWeekOffset(0)
     setSelectedKey(todayKey)
     setGymOpen(false)
+    setEditingGym(false)
   }
 
   const days = getWeekDays()
@@ -82,7 +227,9 @@ export default function History() {
   const done = habits.filter(h => checkedIds.includes(h.id)).length
   const total = habits.length
 
-  const gymData = loadData('gym-' + selectedKey, null)
+  const [gymData, setGymData] = useState(null)
+  // Reload gym data when selected key changes
+  const currentGymData = loadData('gym-' + selectedKey, null)
 
   function getExercises(session) {
     if (!session) return []
@@ -91,12 +238,43 @@ export default function History() {
     return []
   }
 
-  const gymType = gymData
-    ? Object.keys(gymData).find(k => getExercises(gymData[k]).some(ex => ex.sets?.some(s => s.done)))
+  const gymType = currentGymData
+    ? Object.keys(currentGymData).find(k => getExercises(currentGymData[k]).some(ex => ex.sets?.some(s => s.done)))
+    : null
+
+  function handleGymSave(updated) {
+    saveData('gym-' + selectedKey, updated)
+    setEditingGym(false)
+    // Force re-render by toggling gymOpen
+    setGymOpen(true)
+  }
+
+  function handleGymDelete() {
+    saveData('gym-' + selectedKey, null)
+    setEditingGym(false)
+    setGymOpen(false)
+  }
+
+  const unit = getUnit()
+  const liveGymData = loadData('gym-' + selectedKey, null)
+  const liveGymType = liveGymData
+    ? Object.keys(liveGymData).find(k => getExercises(liveGymData[k]).some(ex => ex.sets?.some(s => s.done)))
     : null
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* Gym edit fullscreen */}
+      {editingGym && liveGymType && (
+        <GymEditModal
+          dateKey={selectedKey}
+          gymData={liveGymData}
+          gymDayId={liveGymType}
+          onSave={handleGymSave}
+          onDelete={handleGymDelete}
+          onClose={() => setEditingGym(false)}
+        />
+      )}
 
       {/* Header */}
       <div style={{ padding: '4px 20px 14px', borderBottom: '0.5px solid var(--line)', flexShrink: 0 }}>
@@ -108,10 +286,7 @@ export default function History() {
             Historial, <span style={{ color: 'var(--accent)' }}>{selDate.getDate()} {MS[selDate.getMonth()]}</span>
           </div>
           {!isToday && (
-            <div
-              onClick={goToToday}
-              style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--abg)', border: '0.5px solid var(--adim)', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap' }}
-            >
+            <div onClick={goToToday} style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--abg)', border: '0.5px solid var(--adim)', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap' }}>
               Volver a hoy
             </div>
           )}
@@ -142,18 +317,14 @@ export default function History() {
           const circ = 2 * Math.PI * 14
           const filled = ratio * circ
           const color = isFuture ? 'rgba(255,255,255,0.06)' : scoreColor(ratio)
-
           return (
-            <div
-              key={key}
-              onClick={() => { if (!isFuture) { setSelectedKey(key); setGymOpen(false) } }}
+            <div key={key} onClick={() => { if (!isFuture) { setSelectedKey(key); setGymOpen(false); setEditingGym(false) } }}
               style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, cursor: isFuture ? 'default' : 'pointer', opacity: isFuture ? 0.25 : 1 }}
             >
               <svg width="36" height="36" viewBox="0 0 36 36">
-              <circle cx="18" cy="18" r="14" fill="none" 
-                  stroke={isSel ? 'rgba(168,255,62,0.15)' : wasOpened ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.02)'} 
-                  strokeWidth="4" 
-                  strokeDasharray={wasOpened || isFuture ? 'none' : '2 4'}
+                <circle cx="18" cy="18" r="14" fill="none"
+                  stroke={isSel ? 'rgba(168,255,62,0.15)' : wasOpened ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.02)'}
+                  strokeWidth="4" strokeDasharray={wasOpened || isFuture ? 'none' : '2 4'}
                 />
                 {!isFuture && ratio > 0 && (
                   <circle cx="18" cy="18" r="14" fill="none" stroke={color} strokeWidth="4"
@@ -162,9 +333,7 @@ export default function History() {
                     transform="rotate(-90 18 18)"
                   />
                 )}
-                {isSel && (
-                  <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(168,255,62,0.2)" strokeWidth="1" />
-                )}
+                {isSel && <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(168,255,62,0.2)" strokeWidth="1" />}
               </svg>
               <span style={{ fontSize: 9, color: isSel ? 'var(--accent)' : 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                 {D7[(d.getDay() + 6) % 7]}
@@ -190,19 +359,13 @@ export default function History() {
           {total === 0 ? 'Sin hábitos definidos' : done === total ? '¡Día perfecto!' : `${done} de ${total} hábitos`}
         </div>
 
-        {/* Habit icons grid */}
+        {/* Habit icons */}
         {total > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', padding: '8px 0 20px' }}>
             {habits.map(habit => {
               const isDone = checkedIds.includes(habit.id)
               return (
-                <div key={habit.id} style={{
-                  width: 48, height: 48, borderRadius: 14,
-                  background: isDone ? 'var(--abg)' : 'rgba(255,255,255,0.03)',
-                  border: `0.5px solid ${isDone ? 'var(--adim)' : 'var(--line)'}`,
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
-                  boxShadow: isDone ? '0 0 12px var(--adim)' : 'none',
-                }}>
+                <div key={habit.id} style={{ width: 48, height: 48, borderRadius: 14, background: isDone ? 'var(--abg)' : 'rgba(255,255,255,0.03)', border: `0.5px solid ${isDone ? 'var(--adim)' : 'var(--line)'}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, boxShadow: isDone ? '0 0 12px var(--adim)' : 'none' }}>
                   <i className={`ti ${habit.icon}`} style={{ fontSize: 18, color: isDone ? 'var(--accent)' : 'var(--t3)' }} />
                 </div>
               )
@@ -211,16 +374,24 @@ export default function History() {
         )}
 
         {/* Gym accordion */}
-        {gymType && (
+        {liveGymType && (
           <div style={{ borderTop: '0.5px solid var(--line2)' }}>
-            <div onClick={() => setGymOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', cursor: 'pointer' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '12px 0', gap: 8 }}>
+              <div onClick={() => setGymOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer' }}>
                 <span style={{ fontSize: 10, color: 'var(--accent)', background: 'var(--abg)', border: '0.5px solid var(--adim)', borderRadius: 5, padding: '2px 7px' }}>GYM</span>
-                <span style={{ fontFamily: 'Lora, serif', fontSize: 14, color: 'var(--t1)' }}>{gymType}</span>
+                <span style={{ fontFamily: 'Lora, serif', fontSize: 14, color: 'var(--t1)' }}>{liveGymType}</span>
+                <i className={`ti ti-chevron-${gymOpen ? 'up' : 'down'}`} style={{ fontSize: 13, color: 'var(--t3)' }} />
               </div>
-              <i className={`ti ti-chevron-${gymOpen ? 'up' : 'down'}`} style={{ fontSize: 14, color: 'var(--t3)' }} />
+              {/* Edit button */}
+              <div
+                onClick={() => setEditingGym(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 7, border: '0.5px solid var(--line)', background: 'var(--bg1)', cursor: 'pointer', fontSize: 11, color: 'var(--t2)', fontFamily: 'DM Sans, sans-serif', flexShrink: 0 }}
+              >
+                <i className="ti ti-pencil" style={{ fontSize: 12 }} /> Editar
+              </div>
             </div>
-            {gymOpen && getExercises(gymData[gymType]).map((ex, i) => {
+
+            {gymOpen && getExercises(liveGymData[liveGymType]).map((ex, i) => {
               const doneSets = ex.sets?.filter(s => s.done) || []
               if (doneSets.length === 0) return null
               return (
@@ -229,7 +400,7 @@ export default function History() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                     {doneSets.map((set, j) => (
                       <span key={j} style={{ fontSize: 11, color: 'var(--t3)', background: 'var(--bg1)', border: '0.5px solid var(--line)', borderRadius: 5, padding: '2px 7px' }}>
-                        {set.reps && set.weight ? `${set.reps}×${set.weight}${getUnit()}` : set.reps ? `${set.reps} reps` : `${set.weight}${getUnit()}`}
+                        {fmtSet(set, unit)}
                       </span>
                     ))}
                   </div>

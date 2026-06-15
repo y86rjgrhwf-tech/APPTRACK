@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { loadData, saveData, todayKey, getUnit, setUnit, convertWeight } from './store'
+import { loadData, saveData, todayKey, getUnit, setUnit } from './store'
 
 const DAYS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado']
 const MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
+const MS = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
 
 const SPLITS = {
   PPL: {
@@ -28,10 +29,14 @@ const SPLITS = {
   },
 }
 
+function pad(n) { return String(n).padStart(2, '0') }
+function dateKey(d) { return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) }
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r }
+
 function emptySession(exercises) {
   return exercises.map((name, i) => ({
     name, open: i === 0,
-    sets: [ 
+    sets: [
       { reps: '', weight: '', done: false },
       { reps: '', weight: '', done: false },
       { reps: '', weight: '', done: false },
@@ -39,74 +44,169 @@ function emptySession(exercises) {
   }))
 }
 
+function fmtSet(set, unit) {
+  if (set.reps && set.weight) return `${set.reps}×${set.weight}${unit}`
+  if (set.reps) return `${set.reps} reps`
+  if (set.weight) return `${set.weight}${unit}`
+  return '—'
+}
+
+// ── Get last session for a given day id (up to 60 days back, skip today) ──
+function getLastSession(dayId, todayK) {
+  const today = new Date()
+  for (let i = 1; i <= 60; i++) {
+    const k = dateKey(addDays(today, -i))
+    if (k === todayK) continue
+    const data = loadData('gym-' + k, null)
+    const exArr = data?.[dayId]
+    if (Array.isArray(exArr) && exArr.some(ex => ex.sets?.some(s => s.done))) {
+      return { key: k, exercises: exArr }
+    }
+  }
+  return null
+}
+
+// ── Get full history for a single exercise name across all days ──
+function getExerciseHistory(exName) {
+  const today = new Date()
+  const results = []
+  for (let i = 1; i <= 180; i++) {
+    const k = dateKey(addDays(today, -i))
+    const data = loadData('gym-' + k, null)
+    if (!data) continue
+    Object.values(data).forEach(session => {
+      if (!Array.isArray(session)) return
+      session.forEach(ex => {
+        if (ex.name === exName) {
+          const doneSets = (ex.sets || []).filter(s => s.done)
+          if (doneSets.length > 0) results.push({ key: k, sets: doneSets })
+        }
+      })
+    })
+  }
+  // Deduplicate by key (same exercise can appear twice if somehow logged twice)
+  const seen = new Set()
+  return results.filter(r => { if (seen.has(r.key)) return false; seen.add(r.key); return true })
+}
+
+// ── Weight converter strip ────────────────────────────────────────────────────
+function WeightConverter() {
+  const [unit, setUnitState] = useState(() => getUnit())
+  const [val, setVal] = useState('')
+  const other = unit === 'kg' ? 'lb' : 'kg'
+  const converted = val ? (unit === 'kg' ? +(parseFloat(val) * 2.20462).toFixed(1) : +(parseFloat(val) / 2.20462).toFixed(1)) : ''
+
+  function switchUnit(u) {
+    import('./store').then(m => m.setUnit(u))
+    setUnit(u); setUnitState(u)
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', borderBottom: '0.5px solid var(--line)', background: 'var(--bg1)', flexShrink: 0 }}>
+      <div style={{ display: 'flex', borderRadius: 7, overflow: 'hidden', border: '0.5px solid var(--line)', flexShrink: 0 }}>
+        {['kg', 'lb'].map(u => (
+          <div key={u} onClick={() => switchUnit(u)} style={{ padding: '5px 12px', fontSize: 11, fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', background: unit === u ? 'var(--accent)' : 'transparent', color: unit === u ? 'var(--fg)' : 'var(--t3)', fontWeight: unit === u ? 600 : 400 }}>
+            {u}
+          </div>
+        ))}
+      </div>
+      <input
+        type="number" inputMode="decimal"
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        placeholder="0"
+        style={{ width: 72, padding: '5px 8px', borderRadius: 7, border: '0.5px solid var(--line)', background: 'var(--bg2)', fontFamily: 'DM Sans, sans-serif', fontSize: 13, color: 'var(--t1)', outline: 'none', textAlign: 'center', MozAppearance: 'textfield', WebkitAppearance: 'none' }}
+      />
+      <span style={{ fontSize: 11, color: 'var(--t3)', flexShrink: 0 }}>{unit} →</span>
+      <span style={{ fontSize: 14, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: val ? 'var(--accent)' : 'var(--t3)', minWidth: 52 }}>
+        {val ? `${converted} ${other}` : `— ${other}`}
+      </span>
+    </div>
+  )
+}
+
+// ── Exercise history modal ────────────────────────────────────────────────────
+function ExerciseHistoryModal({ exName, onClose }) {
+  const unit = getUnit()
+  const history = getExerciseHistory(exName)
+
+  function fmtDate(k) {
+    const d = new Date(k + 'T12:00:00')
+    return DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MS[d.getMonth()] + ' ' + d.getFullYear()
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'var(--bg)', zIndex: 300, display: 'flex', flexDirection: 'column' }}>
+      {/* Header */}
+      <div style={{ padding: '12px 20px 14px', borderBottom: '0.5px solid var(--line)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t2)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+          <i className="ti ti-arrow-left" style={{ fontSize: 16 }} />
+        </button>
+        <div>
+          <div style={{ fontFamily: 'Lora, serif', fontSize: 18, color: 'var(--t1)' }}>{exName}</div>
+          <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginTop: 1 }}>
+            {history.length} sesiones registradas
+          </div>
+        </div>
+      </div>
+
+      {/* List */}
+      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '8px 20px 24px' }}>
+        {history.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '48px 0', fontFamily: 'Lora, serif', fontStyle: 'italic', fontSize: 14, color: 'var(--t3)' }}>
+            Sin historial todavía
+          </div>
+        ) : history.map((entry, idx) => (
+          <div key={idx} style={{ padding: '12px 0', borderBottom: '0.5px solid var(--line2)' }}>
+            <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
+              {fmtDate(entry.key)}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {entry.sets.map((set, si) => (
+                <div key={si} style={{ background: 'var(--abg)', border: '0.5px solid var(--adim)', borderRadius: 7, padding: '4px 10px' }}>
+                  <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 1 }}>Set {si + 1}</div>
+                  <div style={{ fontFamily: 'Lora, serif', fontSize: 13, color: 'var(--accent)' }}>{fmtSet(set, unit)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Set bottom sheet ──────────────────────────────────────────────────────────
 function SetSheet({ setNum, exName, set, onSave, onDelete, onClose }) {
   const unit = getUnit()
   const [reps, setReps] = useState(set.reps || '')
-  // Weight is stored as-entered. No conversion on save — only label changes.
   const [weight, setWeight] = useState(set.weight || '')
 
   return (
-    <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }}
-      onClick={onClose}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 430, margin: '0 auto', background: 'var(--bg1)', borderRadius: '20px 20px 0 0', borderTop: '0.5px solid var(--line)', padding: '16px 20px 40px' }}
-      >
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 430, margin: '0 auto', background: 'var(--bg1)', borderRadius: '20px 20px 0 0', borderTop: '0.5px solid var(--line)', padding: '16px 20px 40px' }}>
         <div style={{ width: 36, height: 3, background: 'var(--line)', borderRadius: 2, margin: '0 auto 16px' }} />
-        <div style={{ fontFamily: 'Lora, serif', fontSize: 16, color: 'var(--t1)', marginBottom: 4, textAlign: 'center' }}>
-          Set {setNum}
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--t3)', textAlign: 'center', marginBottom: 20, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-          {exName}
-        </div>
+        <div style={{ fontFamily: 'Lora, serif', fontSize: 16, color: 'var(--t1)', marginBottom: 4, textAlign: 'center' }}>Set {setNum}</div>
+        <div style={{ fontSize: 11, color: 'var(--t3)', textAlign: 'center', marginBottom: 20, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{exName}</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>Reps</div>
-            <input
-              type="number" inputMode="numeric"
-              value={reps}
-              onChange={e => setReps(e.target.value)}
-              autoFocus
-              style={{
-                background: 'var(--bg2)', border: `0.5px solid ${reps ? 'var(--accent)' : 'var(--line)'}`,
-                borderRadius: 12, padding: '20px 8px', fontSize: 36,
-                fontFamily: 'DM Sans, sans-serif', fontWeight: 600,
-                color: reps ? 'var(--accent)' : 'var(--t3)',
-                textAlign: 'center', width: '100%', outline: 'none',
-                MozAppearance: 'textfield', WebkitAppearance: 'none',
-              }}
+            <input type="number" inputMode="numeric" value={reps} onChange={e => setReps(e.target.value)} autoFocus
+              style={{ background: 'var(--bg2)', border: `0.5px solid ${reps ? 'var(--accent)' : 'var(--line)'}`, borderRadius: 12, padding: '20px 8px', fontSize: 36, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: reps ? 'var(--accent)' : 'var(--t3)', textAlign: 'center', width: '100%', outline: 'none', MozAppearance: 'textfield', WebkitAppearance: 'none' }}
             />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>Peso ({unit})</div>
-            <input
-              type="number" inputMode="decimal"
-              value={weight}
-              onChange={e => setWeight(e.target.value)}
-              style={{
-                background: 'var(--bg2)', border: `0.5px solid ${weight ? 'var(--accent)' : 'var(--line)'}`,
-                borderRadius: 12, padding: '20px 8px', fontSize: 36,
-                fontFamily: 'DM Sans, sans-serif', fontWeight: 600,
-                color: weight ? 'var(--accent)' : 'var(--t3)',
-                textAlign: 'center', width: '100%', outline: 'none',
-                MozAppearance: 'textfield', WebkitAppearance: 'none',
-              }}
+            <input type="number" inputMode="decimal" value={weight} onChange={e => setWeight(e.target.value)}
+              style={{ background: 'var(--bg2)', border: `0.5px solid ${weight ? 'var(--accent)' : 'var(--line)'}`, borderRadius: 12, padding: '20px 8px', fontSize: 36, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: weight ? 'var(--accent)' : 'var(--t3)', textAlign: 'center', width: '100%', outline: 'none', MozAppearance: 'textfield', WebkitAppearance: 'none' }}
             />
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={onDelete}
-            style={{ padding: '14px 16px', borderRadius: 12, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t3)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, cursor: 'pointer' }}
-          >
+          <button onClick={onDelete} style={{ padding: '14px 16px', borderRadius: 12, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t3)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, cursor: 'pointer' }}>
             <i className="ti ti-trash" />
           </button>
-          <button
-            onClick={() => onSave({ reps, weight, done: !!(reps || weight) })}
-            style={{ flex: 1, padding: 14, borderRadius: 12, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
-          >
+          <button onClick={() => onSave({ reps, weight, done: !!(reps || weight) })} style={{ flex: 1, padding: 14, borderRadius: 12, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
             Confirmar set ✓
           </button>
         </div>
@@ -115,14 +215,13 @@ function SetSheet({ setNum, exName, set, onSave, onDelete, onClose }) {
   )
 }
 
+// ── Edit workout modal (structure, not logs) ──────────────────────────────────
 function EditWorkoutModal({ day, onSave, onClose }) {
   const [name, setName] = useState(day.name)
   const [exercises, setExercises] = useState([...day.exercises])
   const [newEx, setNewEx] = useState('')
 
-  function addEx() {
-    if (newEx.trim()) { setExercises([...exercises, newEx.trim()]); setNewEx('') }
-  }
+  function addEx() { if (newEx.trim()) { setExercises([...exercises, newEx.trim()]); setNewEx('') } }
   function removeEx(i) { setExercises(exercises.filter((_, idx) => idx !== i)) }
   function moveUp(i) { if (i === 0) return; const a = [...exercises]; [a[i-1],a[i]]=[a[i],a[i-1]]; setExercises(a) }
   function moveDown(i) { if (i === exercises.length-1) return; const a = [...exercises]; [a[i],a[i+1]]=[a[i+1],a[i]]; setExercises(a) }
@@ -133,10 +232,7 @@ function EditWorkoutModal({ day, onSave, onClose }) {
         <div style={{ width: 36, height: 3, background: 'var(--line)', borderRadius: 2, margin: '0 auto 16px' }} />
         <div style={{ fontFamily: 'Lora, serif', fontSize: 17, color: 'var(--t1)', marginBottom: 16 }}>Editar workout</div>
         <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>Nombre</div>
-        <input
-          value={name} onChange={e => setName(e.target.value)}
-          style={{ width: '100%', padding: '10px 14px', borderRadius: 9, border: '0.5px solid var(--line)', background: 'var(--bg1)', fontFamily: 'Lora, serif', fontSize: 15, color: 'var(--t1)', outline: 'none', marginBottom: 20 }}
-        />
+        <input value={name} onChange={e => setName(e.target.value)} style={{ width: '100%', padding: '10px 14px', borderRadius: 9, border: '0.5px solid var(--line)', background: 'var(--bg1)', fontFamily: 'Lora, serif', fontSize: 15, color: 'var(--t1)', outline: 'none', marginBottom: 20 }} />
         <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>Ejercicios</div>
         {exercises.map((ex, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '0.5px solid var(--line2)' }}>
@@ -147,18 +243,11 @@ function EditWorkoutModal({ day, onSave, onClose }) {
           </div>
         ))}
         <div style={{ display: 'flex', gap: 8, marginTop: 12, marginBottom: 20 }}>
-          <input
-            value={newEx} onChange={e => setNewEx(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addEx()}
-            placeholder="Añadir ejercicio"
-            style={{ flex: 1, padding: '10px 14px', borderRadius: 9, border: '0.5px solid var(--line)', background: 'var(--bg1)', fontFamily: 'Lora, serif', fontSize: 14, color: 'var(--t1)', outline: 'none' }}
-          />
+          <input value={newEx} onChange={e => setNewEx(e.target.value)} onKeyDown={e => e.key === 'Enter' && addEx()} placeholder="Añadir ejercicio"
+            style={{ flex: 1, padding: '10px 14px', borderRadius: 9, border: '0.5px solid var(--line)', background: 'var(--bg1)', fontFamily: 'Lora, serif', fontSize: 14, color: 'var(--t1)', outline: 'none' }} />
           <button onClick={addEx} style={{ padding: '10px 16px', borderRadius: 9, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 13, cursor: 'pointer' }}>+ Añadir</button>
         </div>
-        <button
-          onClick={() => onSave({ ...day, name, exercises })}
-          style={{ width: '100%', padding: 12, borderRadius: 9, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
-        >
+        <button onClick={() => onSave({ ...day, name, exercises })} style={{ width: '100%', padding: 12, borderRadius: 9, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}>
           Guardar workout
         </button>
       </div>
@@ -166,55 +255,39 @@ function EditWorkoutModal({ day, onSave, onClose }) {
   )
 }
 
+// ── Onboarding ────────────────────────────────────────────────────────────────
 function Onboarding({ onDone }) {
   const [step, setStep] = useState('pick')
   const [selectedSplit, setSelectedSplit] = useState(null)
   const [customDays, setCustomDays] = useState([{ id: 'day1', name: 'Día 1', exercises: [] }])
   const [editingDay, setEditingDay] = useState(null)
 
-  function confirmSplit() {
-    onDone(SPLITS[selectedSplit].days)
-  }
-
-  function addCustomDay() {
-    setCustomDays([...customDays, { id: 'day' + Date.now(), name: 'Día ' + (customDays.length + 1), exercises: [] }])
-  }
-
-  function saveCustomDay(updated) {
-    setCustomDays(customDays.map(d => d.id === updated.id ? updated : d))
-    setEditingDay(null)
-  }
+  function confirmSplit() { onDone(SPLITS[selectedSplit].days) }
+  function addCustomDay() { setCustomDays([...customDays, { id: 'day' + Date.now(), name: 'Día ' + (customDays.length + 1), exercises: [] }]) }
+  function saveCustomDay(updated) { setCustomDays(customDays.map(d => d.id === updated.id ? updated : d)); setEditingDay(null) }
 
   if (step === 'custom') return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{ padding: '16px 20px 14px', borderBottom: '0.5px solid var(--line)', flexShrink: 0 }}>
         <div onClick={() => setStep('pick')} style={{ color: 'var(--t3)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-          <i className="ti ti-arrow-left" style={{ fontSize: 16 }} />
-          <span style={{ fontSize: 13 }}>Volver</span>
+          <i className="ti ti-arrow-left" style={{ fontSize: 16 }} /><span style={{ fontSize: 13 }}>Volver</span>
         </div>
         <div style={{ fontFamily: 'Lora, serif', fontSize: 22, color: 'var(--t1)' }}>Tu split <span style={{ color: 'var(--accent)' }}>personalizado</span></div>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
-        {customDays.map((day) => (
+        {customDays.map(day => (
           <div key={day.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: '0.5px solid var(--line2)' }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontFamily: 'Lora, serif', fontSize: 15, color: 'var(--t1)' }}>{day.name}</div>
               <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 2 }}>{day.exercises.length} ejercicios</div>
             </div>
-            <div onClick={() => setEditingDay(day)} style={{ background: 'var(--bg1)', border: '0.5px solid var(--line)', borderRadius: 7, padding: '6px 12px', color: 'var(--t2)', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>
-              Editar
-            </div>
+            <div onClick={() => setEditingDay(day)} style={{ background: 'var(--bg1)', border: '0.5px solid var(--line)', borderRadius: 7, padding: '6px 12px', color: 'var(--t2)', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>Editar</div>
           </div>
         ))}
-        <div onClick={addCustomDay} style={{ width: '100%', padding: 12, marginTop: 12, border: '0.5px dashed var(--line)', borderRadius: 9, background: 'transparent', color: 'var(--t3)', fontFamily: 'DM Sans, sans-serif', fontSize: 13, cursor: 'pointer', textAlign: 'center' }}>
-          + Añadir día
-        </div>
+        <div onClick={addCustomDay} style={{ width: '100%', padding: 12, marginTop: 12, border: '0.5px dashed var(--line)', borderRadius: 9, background: 'transparent', color: 'var(--t3)', fontFamily: 'DM Sans, sans-serif', fontSize: 13, cursor: 'pointer', textAlign: 'center' }}>+ Añadir día</div>
       </div>
       <div style={{ padding: '12px 20px 24px', borderTop: '0.5px solid var(--line2)', flexShrink: 0 }}>
-        <div
-          onClick={() => customDays.some(d => d.exercises.length > 0) && onDone(customDays)}
-          style={{ width: '100%', padding: 14, borderRadius: 12, background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: 'pointer', textAlign: 'center', opacity: customDays.every(d => d.exercises.length === 0) ? 0.4 : 1 }}
-        >
+        <div onClick={() => customDays.some(d => d.exercises.length > 0) && onDone(customDays)} style={{ width: '100%', padding: 14, borderRadius: 12, background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: 'pointer', textAlign: 'center', opacity: customDays.every(d => d.exercises.length === 0) ? 0.4 : 1 }}>
           Empezar con este split
         </div>
       </div>
@@ -229,15 +302,9 @@ function Onboarding({ onDone }) {
         <div style={{ fontFamily: 'Lora, serif', fontSize: 22, color: 'var(--t1)' }}>Elige tu <span style={{ color: 'var(--accent)' }}>split</span></div>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
-        <div style={{ fontSize: 12, color: 'var(--t3)', marginBottom: 20, lineHeight: 1.6 }}>
-          Selecciona cómo quieres organizar tus workouts. Podrás editarlos después.
-        </div>
+        <div style={{ fontSize: 12, color: 'var(--t3)', marginBottom: 20, lineHeight: 1.6 }}>Selecciona cómo quieres organizar tus workouts. Podrás editarlos después.</div>
         {Object.entries(SPLITS).map(([key, split]) => (
-          <div
-            key={key}
-            onClick={() => setSelectedSplit(key)}
-            style={{ padding: '14px 16px', borderRadius: 12, marginBottom: 10, border: `0.5px solid ${selectedSplit === key ? 'var(--accent)' : 'var(--line)'}`, background: selectedSplit === key ? 'var(--abg)' : 'var(--bg1)', cursor: 'pointer' }}
-          >
+          <div key={key} onClick={() => setSelectedSplit(key)} style={{ padding: '14px 16px', borderRadius: 12, marginBottom: 10, border: `0.5px solid ${selectedSplit === key ? 'var(--accent)' : 'var(--line)'}`, background: selectedSplit === key ? 'var(--abg)' : 'var(--bg1)', cursor: 'pointer' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
               <div style={{ fontFamily: 'Lora, serif', fontSize: 16, color: selectedSplit === key ? 'var(--accent)' : 'var(--t1)' }}>{split.label}</div>
               <div style={{ width: 20, height: 20, borderRadius: '50%', border: `1.5px solid ${selectedSplit === key ? 'var(--accent)' : 'var(--line)'}`, background: selectedSplit === key ? 'var(--accent)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -247,10 +314,7 @@ function Onboarding({ onDone }) {
             <div style={{ fontSize: 12, color: 'var(--t3)' }}>{split.days.map(d => d.name).join(' · ')}</div>
           </div>
         ))}
-        <div
-          onClick={() => setStep('custom')}
-          style={{ padding: '14px 16px', borderRadius: 12, marginBottom: 10, border: '0.5px dashed var(--line)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}
-        >
+        <div onClick={() => setStep('custom')} style={{ padding: '14px 16px', borderRadius: 12, marginBottom: 10, border: '0.5px dashed var(--line)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}>
           <i className="ti ti-plus" style={{ fontSize: 18, color: 'var(--t3)' }} />
           <div>
             <div style={{ fontFamily: 'Lora, serif', fontSize: 16, color: 'var(--t2)' }}>Personalizado</div>
@@ -259,10 +323,7 @@ function Onboarding({ onDone }) {
         </div>
       </div>
       <div style={{ padding: '12px 20px 24px', borderTop: '0.5px solid var(--line2)', flexShrink: 0 }}>
-        <div
-          onClick={() => selectedSplit && confirmSplit()}
-          style={{ width: '100%', padding: 14, borderRadius: 12, background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: selectedSplit ? 'pointer' : 'default', textAlign: 'center', opacity: selectedSplit ? 1 : 0.4 }}
-        >
+        <div onClick={() => selectedSplit && confirmSplit()} style={{ width: '100%', padding: 14, borderRadius: 12, background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, cursor: selectedSplit ? 'pointer' : 'default', textAlign: 'center', opacity: selectedSplit ? 1 : 0.4 }}>
           Empezar con este split
         </div>
       </div>
@@ -270,49 +331,17 @@ function Onboarding({ onDone }) {
   )
 }
 
-// Inline kg <-> lb converter widget shown in Gym header
-function WeightConverter() {
-  const [unit, setUnitState] = useState(() => getUnit())
-  const [val, setVal] = useState('')
-  const other = unit === 'kg' ? 'lb' : 'kg'
-  const converted = convertWeight(val, unit, other)
-
-  function switchUnit(u) { setUnit(u); setUnitState(u) }
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 20px', borderBottom: '0.5px solid var(--line)', background: 'var(--bg1)', flexShrink: 0 }}>
-      {/* Unit toggle */}
-      <div style={{ display: 'flex', borderRadius: 7, overflow: 'hidden', border: '0.5px solid var(--line)', flexShrink: 0 }}>
-        {['kg', 'lb'].map(u => (
-          <div key={u} onClick={() => switchUnit(u)} style={{ padding: '5px 12px', fontSize: 11, fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', background: unit === u ? 'var(--accent)' : 'transparent', color: unit === u ? 'var(--fg)' : 'var(--t3)', fontWeight: unit === u ? 600 : 400 }}>
-            {u}
-          </div>
-        ))}
-      </div>
-      {/* Converter */}
-      <input
-        type="number" inputMode="decimal"
-        value={val}
-        onChange={e => setVal(e.target.value)}
-        placeholder="0"
-        style={{ width: 72, padding: '5px 8px', borderRadius: 7, border: '0.5px solid var(--line)', background: 'var(--bg2)', fontFamily: 'DM Sans, sans-serif', fontSize: 13, color: 'var(--t1)', outline: 'none', textAlign: 'center', MozAppearance: 'textfield', WebkitAppearance: 'none' }}
-      />
-      <span style={{ fontSize: 11, color: 'var(--t3)', flexShrink: 0 }}>{unit} →</span>
-      <span style={{ fontSize: 14, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: val ? 'var(--accent)' : 'var(--t3)', minWidth: 48 }}>
-        {val ? `${converted} ${other}` : `— ${other}`}
-      </span>
-    </div>
-  )
-}
-
+// ── Main Gym component ────────────────────────────────────────────────────────
 export default function Gym() {
   const key = todayKey()
+  const unit = getUnit()
   const [workoutDays, setWorkoutDays] = useState(() => loadData('gym-days', null))
-  const [activeTab, setActiveTab] = useState(0)
+  const [activeTab, setActiveTab] = useState(() => loadData('gym-active-tab', 0))
   const [sessions, setSessions] = useState(() => loadData('gym-' + key, null))
   const [saved, setSaved] = useState(() => loadData('gym-saved-' + key, false))
   const [activeSheet, setActiveSheet] = useState(null)
   const [editingDay, setEditingDay] = useState(null)
+  const [historyEx, setHistoryEx] = useState(null) // exercise name for fullscreen history
   const now = new Date()
 
   // Auto-initialize sessions for all days when workoutDays exist but no session saved today
@@ -354,33 +383,25 @@ export default function Gym() {
     })
   }
 
-  function toggleOpen(ei) {
-    updateSession(s => s.map((ex, i) => i === ei ? { ...ex, open: !ex.open } : ex))
-  }
+  function toggleOpen(ei) { updateSession(s => s.map((ex, i) => i === ei ? { ...ex, open: !ex.open } : ex)) }
 
   function saveSet(ei, si, setData) {
-    updateSession(s => s.map((ex, i) => i !== ei ? ex : {
-      ...ex, sets: ex.sets.map((set, j) => j !== si ? set : { ...setData })
-    }))
+    updateSession(s => s.map((ex, i) => i !== ei ? ex : { ...ex, sets: ex.sets.map((set, j) => j !== si ? set : { ...setData }) }))
     setActiveSheet(null)
   }
 
-  function addSet(ei) {
-    updateSession(s => s.map((ex, i) => i !== ei ? ex : {
-      ...ex, sets: [...ex.sets, { reps: '', weight: '', done: false }]
-    }))
-  }
+  function addSet(ei) { updateSession(s => s.map((ex, i) => i !== ei ? ex : { ...ex, sets: [...ex.sets, { reps: '', weight: '', done: false }] })) }
 
   function deleteSet(ei, si) {
-    updateSession(s => s.map((ex, i) => i !== ei ? ex : {
-      ...ex, sets: ex.sets.length <= 1 ? ex.sets : ex.sets.filter((_, j) => j !== si)
-    }))
+    updateSession(s => s.map((ex, i) => i !== ei ? ex : { ...ex, sets: ex.sets.length <= 1 ? ex.sets : ex.sets.filter((_, j) => j !== si) }))
   }
 
-  function save() {
-    saveData('gym-' + key, sessions)
-    saveData('gym-saved-' + key, true)
-    setSaved(true)
+  function save() { saveData('gym-' + key, sessions); saveData('gym-saved-' + key, true); setSaved(true) }
+
+  function changeTab(i) {
+    setActiveTab(i)
+    saveData('gym-active-tab', i)
+    setSaved(loadData('gym-saved-' + key, false))
   }
 
   function saveEditedDay(updated) {
@@ -403,13 +424,35 @@ export default function Gym() {
   if (!workoutDays) return <Onboarding onDone={initWorkout} />
 
   const session = getSession() || []
-  const currentDay = workoutDays[activeTab]
+  const currentDay = workoutDays[activeTab] || workoutDays[0]
   const allSets = session.flatMap(ex => ex.sets)
   const doneSets = allSets.filter(s => s.done).length
 
+  // Last session for current day (for "previous" preview)
+  const lastSession = getLastSession(currentDay.id, key)
+
+  function getLastSets(exName) {
+    if (!lastSession) return null
+    const ex = lastSession.exercises.find(e => e.name === exName)
+    if (!ex) return null
+    const done = (ex.sets || []).filter(s => s.done)
+    return done.length > 0 ? done : null
+  }
+
+  function fmtLastDate(k) {
+    const d = new Date(k + 'T12:00:00')
+    const diff = Math.round((new Date() - d) / 86400000)
+    if (diff === 1) return 'ayer'
+    if (diff < 7) return `hace ${diff}d`
+    return d.getDate() + ' ' + MS[d.getMonth()]
+  }
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Fullscreen exercise history */}
+      {historyEx && <ExerciseHistoryModal exName={historyEx} onClose={() => setHistoryEx(null)} />}
 
+      {/* Header */}
       <div style={{ padding: '4px 20px 14px', borderBottom: '0.5px solid var(--line)', flexShrink: 0 }}>
         <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.14em', textTransform: 'uppercase', marginBottom: 2 }}>
           {DAYS[now.getDay()]} · {now.getDate()} de {MONTHS[now.getMonth()]} de {now.getFullYear()}
@@ -418,12 +461,8 @@ export default function Gym() {
           <div style={{ fontFamily: 'Lora, serif', fontSize: 22, color: 'var(--t1)', letterSpacing: '-0.02em' }}>
             Gym — <span style={{ color: 'var(--accent)' }}>{currentDay.name}</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
-              <span style={{ fontFamily: 'Lora, serif', fontStyle: 'italic', fontSize: 10, color: 'var(--t3)' }}>editar</span>
-              <span style={{ fontSize: 12, color: 'var(--t3)' }}>——→</span>
-            </div>
-            <div onClick={() => { if (window.confirm('¿Cambiar split? Se perderá la configuración actual.')) { saveData('gym-days', null); setWorkoutDays(null) } }} style={{ cursor: 'pointer', color: 'var(--t3)', padding: '4px 8px', fontSize: 12, fontFamily: 'DM Sans, sans-serif' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div onClick={() => { if (window.confirm('¿Cambiar split? Se perderá la configuración actual.')) { saveData('gym-days', null); setWorkoutDays(null) } }} style={{ cursor: 'pointer', color: 'var(--t3)', padding: '4px 8px', fontSize: 11, fontFamily: 'DM Sans, sans-serif' }}>
               cambiar split
             </div>
             <div onClick={() => setEditingDay(currentDay)} style={{ cursor: 'pointer', color: 'var(--t3)', padding: '4px 8px' }}>
@@ -433,25 +472,21 @@ export default function Gym() {
         </div>
       </div>
 
+      {/* Converter */}
       <WeightConverter />
 
+      {/* Day tabs */}
       <div style={{ display: 'flex', gap: 6, padding: '10px 20px', borderBottom: '0.5px solid var(--line)', flexShrink: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch', maskImage: 'linear-gradient(to right, black 85%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, black 85%, transparent 100%)' }}>
         {workoutDays.map((day, i) => {
-          // Find last time this workout was done
           let lastDone = null
           for (let d = 1; d <= 30; d++) {
-            const k = (() => { const dt = new Date(); dt.setDate(dt.getDate() - d); return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0') })()
+            const k = dateKey(addDays(now, -d))
             const s = loadData('gym-' + k, null)
             if (s?.[day.id]?.some?.(ex => ex.sets?.some(set => set.done))) { lastDone = d; break }
-            if (Array.isArray(s?.[day.id]) && s[day.id].some(ex => ex.sets?.some(set => set.done))) { lastDone = d; break }
           }
           const lastLabel = lastDone === null ? null : lastDone === 1 ? 'ayer' : `hace ${lastDone}d`
           return (
-            <div
-              key={day.id}
-              onClick={() => { setActiveTab(i); setSaved(loadData('gym-saved-' + key, false)) }}
-              style={{ flexShrink: 0, padding: '8px 16px', borderRadius: 8, textAlign: 'center', border: `0.5px solid ${activeTab === i ? 'var(--adim)' : 'var(--line)'}`, background: activeTab === i ? 'var(--abg)' : 'var(--bg1)', cursor: 'pointer' }}
-            >
+            <div key={day.id} onClick={() => changeTab(i)} style={{ flexShrink: 0, padding: '8px 16px', borderRadius: 8, textAlign: 'center', border: `0.5px solid ${activeTab === i ? 'var(--adim)' : 'var(--line)'}`, background: activeTab === i ? 'var(--abg)' : 'var(--bg1)', cursor: 'pointer' }}>
               <div style={{ fontFamily: 'Lora, serif', fontSize: 14, color: activeTab === i ? 'var(--accent)' : 'var(--t2)', whiteSpace: 'nowrap' }}>{day.name}</div>
               {lastLabel && <div style={{ fontSize: 9, color: activeTab === i ? 'var(--adim)' : 'var(--t3)', letterSpacing: '0.06em', marginTop: 2 }}>{lastLabel}</div>}
             </div>
@@ -459,13 +494,25 @@ export default function Gym() {
         })}
       </div>
 
+      {/* Last session banner */}
+      {lastSession && (
+        <div style={{ padding: '6px 20px', background: 'var(--bg1)', borderBottom: '0.5px solid var(--line2)', flexShrink: 0 }}>
+          <span style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.06em' }}>
+            Última sesión: <span style={{ color: 'var(--accent)' }}>{fmtLastDate(lastSession.key)}</span>
+          </span>
+        </div>
+      )}
+
+      {/* Exercise list */}
       <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '0 20px' }}>
         {session.map((ex, ei) => {
           const doneSetsEx = ex.sets.filter(s => s.done).length
+          const lastSets = getLastSets(ex.name)
           return (
             <div key={ei} style={{ borderBottom: ei < session.length - 1 ? '0.5px solid var(--line2)' : 'none' }}>
-              <div onClick={() => toggleOpen(ei)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 0', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
+              {/* Exercise header row */}
+              <div style={{ display: 'flex', alignItems: 'center', padding: '13px 0 4px', gap: 8 }}>
+                <div onClick={() => toggleOpen(ei)} style={{ flex: 1, minWidth: 0, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
                   <div style={{ fontFamily: 'Lora, serif', fontSize: 15, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ex.name}</div>
                   {!ex.open && (
                     <div style={{ fontSize: 10, color: doneSetsEx > 0 ? 'var(--accent)' : 'var(--t3)', marginTop: 2 }}>
@@ -473,31 +520,47 @@ export default function Gym() {
                     </div>
                   )}
                 </div>
-                <i className={`ti ti-chevron-${ex.open ? 'up' : 'down'}`} style={{ fontSize: 14, color: 'var(--t3)', flexShrink: 0, marginLeft: 8 }} />
+                {/* History button */}
+                <div onClick={() => setHistoryEx(ex.name)} style={{ padding: '4px 6px', cursor: 'pointer', color: 'var(--t3)', flexShrink: 0 }}>
+                  <i className="ti ti-history" style={{ fontSize: 16 }} />
+                </div>
+                <div onClick={() => toggleOpen(ei)} style={{ cursor: 'pointer', color: 'var(--t3)', flexShrink: 0 }}>
+                  <i className={`ti ti-chevron-${ex.open ? 'up' : 'down'}`} style={{ fontSize: 14 }} />
+                </div>
               </div>
 
+              {/* Previous session preview */}
+              {ex.open && lastSets && (
+                <div style={{ padding: '4px 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 9, color: 'var(--t3)', letterSpacing: '0.06em', textTransform: 'uppercase', flexShrink: 0 }}>
+                    {fmtLastDate(lastSession.key)}
+                  </span>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {lastSets.map((s, si) => (
+                      <span key={si} style={{ fontSize: 10, color: 'var(--t3)', background: 'var(--bg1)', border: '0.5px solid var(--line)', borderRadius: 5, padding: '2px 6px' }}>
+                        {fmtSet(s, unit)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sets */}
               {ex.open && (
                 <div style={{ paddingBottom: 14 }}>
                   <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
                     {ex.sets.map((set, si) => (
-                      <div
-                        key={si}
-                        onClick={() => setActiveSheet({ exIdx: ei, setIdx: si })}
+                      <div key={si} onClick={() => setActiveSheet({ exIdx: ei, setIdx: si })}
                         style={{ flex: '1 1 60px', minWidth: 60, padding: '10px 6px', borderRadius: 10, textAlign: 'center', background: set.done ? 'var(--abg)' : 'var(--bg1)', border: `0.5px solid ${set.done ? 'var(--adim)' : 'var(--line)'}`, cursor: 'pointer', boxShadow: set.done ? '0 0 10px var(--adim)' : 'none' }}
                       >
                         <div style={{ fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Set {si + 1}</div>
                         {set.reps || set.weight
-                          ? <div style={{ fontFamily: 'Lora, serif', fontSize: 13, color: set.done ? 'var(--accent)' : 'var(--t2)' }}>
-                              {set.reps && set.weight ? `${set.reps}×${set.weight}${getUnit()}` : set.reps ? `${set.reps} reps` : `${set.weight}${getUnit()}`}
-                            </div>
+                          ? <div style={{ fontFamily: 'Lora, serif', fontSize: 13, color: set.done ? 'var(--accent)' : 'var(--t2)' }}>{fmtSet(set, unit)}</div>
                           : <div style={{ fontSize: 12, color: 'var(--t3)' }}>Tocar</div>
                         }
                       </div>
                     ))}
-                    <div
-                      onClick={() => addSet(ei)}
-                      style={{ flex: '0 0 44px', padding: '10px 6px', borderRadius: 10, textAlign: 'center', background: 'transparent', border: '0.5px dashed var(--line)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    >
+                    <div onClick={() => addSet(ei)} style={{ flex: '0 0 44px', padding: '10px 6px', borderRadius: 10, textAlign: 'center', background: 'transparent', border: '0.5px dashed var(--line)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <i className="ti ti-plus" style={{ fontSize: 14, color: 'var(--t3)' }} />
                     </div>
                   </div>
@@ -508,11 +571,9 @@ export default function Gym() {
         })}
       </div>
 
+      {/* Save button */}
       <div style={{ padding: '10px 20px 12px', borderTop: '0.5px solid var(--line2)', flexShrink: 0 }}>
-        <div
-          onClick={save}
-          style={{ width: '100%', padding: 12, borderRadius: 9, background: saved ? '#2d5a2d' : 'var(--accent)', color: saved ? '#c8f0c8' : 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, fontWeight: 500, cursor: 'pointer', textAlign: 'center', transition: 'background 0.2s' }}
-        >
+        <div onClick={save} style={{ width: '100%', padding: 12, borderRadius: 9, background: saved ? '#2d5a2d' : 'var(--accent)', color: saved ? '#c8f0c8' : 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, fontWeight: 500, cursor: 'pointer', textAlign: 'center', transition: 'background 0.2s' }}>
           {saved ? `Guardado — ${doneSets}/${allSets.length} sets ✓` : 'Guardar sesión'}
         </div>
       </div>
@@ -528,13 +589,7 @@ export default function Gym() {
         />
       )}
 
-      {editingDay && (
-        <EditWorkoutModal
-          day={editingDay}
-          onSave={saveEditedDay}
-          onClose={() => setEditingDay(null)}
-        />
-      )}
+      {editingDay && <EditWorkoutModal day={editingDay} onSave={saveEditedDay} onClose={() => setEditingDay(null)} />}
     </div>
   )
 }
