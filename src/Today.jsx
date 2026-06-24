@@ -35,7 +35,7 @@ function saveSleepWaketime(dayKey, waketimeStr) {
     const [wh, wm] = waketimeStr.split(':').map(Number)
     let mins = (wh * 60 + wm) - (bh * 60 + bm)
     if (mins < 0) mins += 24 * 60 // crossed midnight
-    updated.duration = Math.round(mins / 6) / 10 // hours with 1 decimal
+    updated.duration = Math.round(mins / 60 * 10) / 10 // hours with 1 decimal
   }
   saveData('sleep-' + dayKey, updated)
 }
@@ -82,17 +82,31 @@ function IconPicker({ selected, onSelect, onClose }) {
 }
 
 // ── Sleep bottom sheet ────────────────────────────────────────────────────────
-function SleepSheet({ habit, dayKey, sleepData, onClose }) {
-  const hasBedtime = !!sleepData?.bedtime
-  const hasWaketime = !!sleepData?.waketime
+function SleepSheet({ habit, dayKey, onClose, onSaved }) {
+  // Always read fresh from storage — never rely on stale props
+  function readFresh() { return loadData('sleep-' + dayKey, {}) }
+
+  const initial = readFresh()
+  const hasBedtime = !!initial.bedtime
+  const hasWaketime = !!initial.waketime
+
+  // Smart default: if bedtime exists but no wake yet, go to wake mode
   const [mode, setMode] = useState(hasBedtime && !hasWaketime ? 'wake' : 'bed')
   const [timeVal, setTimeVal] = useState(
-    mode === 'wake' ? (sleepData?.waketime || '') : (sleepData?.bedtime || '')
+    hasBedtime && !hasWaketime ? (initial.waketime || '') : (initial.bedtime || '')
   )
+  // Local copy of sleep data for display — updated after each save
+  const [display, setDisplay] = useState(initial)
 
-  // Get current time as default
   const now = new Date()
   const defaultTime = pad(now.getHours()) + ':' + pad(now.getMinutes())
+
+  function switchMode(m) {
+    const d = readFresh()
+    setMode(m)
+    setTimeVal(m === 'bed' ? (d.bedtime || '') : (d.waketime || ''))
+    setDisplay(d)
+  }
 
   function handleSave() {
     const val = timeVal || defaultTime
@@ -101,6 +115,9 @@ function SleepSheet({ habit, dayKey, sleepData, onClose }) {
     } else {
       saveSleepWaketime(dayKey, val)
     }
+    // Refresh display with what was just saved
+    setDisplay(readFresh())
+    onSaved()
     onClose()
   }
 
@@ -113,27 +130,27 @@ function SleepSheet({ habit, dayKey, sleepData, onClose }) {
 
         {/* Mode selector */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-          <div onClick={() => { setMode('bed'); setTimeVal(sleepData?.bedtime || '') }}
+          <div onClick={() => switchMode('bed')}
             style={{ flex: 1, padding: '10px 0', borderRadius: 10, textAlign: 'center', cursor: 'pointer', background: isBedMode ? 'var(--abg)' : 'var(--bg2)', border: `0.5px solid ${isBedMode ? 'var(--accent)' : 'var(--line)'}` }}>
             <i className="ti ti-moon" style={{ fontSize: 18, color: isBedMode ? 'var(--accent)' : 'var(--t3)', display: 'block', marginBottom: 4 }} />
             <div style={{ fontSize: 11, color: isBedMode ? 'var(--accent)' : 'var(--t3)', fontFamily: 'DM Sans, sans-serif' }}>Me voy a dormir</div>
-            {sleepData?.bedtime && <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2 }}>{sleepData.bedtime}</div>}
+            {display.bedtime && <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2 }}>{display.bedtime}</div>}
           </div>
-          <div onClick={() => { setMode('wake'); setTimeVal(sleepData?.waketime || '') }}
+          <div onClick={() => switchMode('wake')}
             style={{ flex: 1, padding: '10px 0', borderRadius: 10, textAlign: 'center', cursor: 'pointer', background: !isBedMode ? 'var(--abg)' : 'var(--bg2)', border: `0.5px solid ${!isBedMode ? 'var(--accent)' : 'var(--line)'}` }}>
             <i className="ti ti-sun" style={{ fontSize: 18, color: !isBedMode ? 'var(--accent)' : 'var(--t3)', display: 'block', marginBottom: 4 }} />
             <div style={{ fontSize: 11, color: !isBedMode ? 'var(--accent)' : 'var(--t3)', fontFamily: 'DM Sans, sans-serif' }}>Me desperté</div>
-            {sleepData?.waketime && <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2 }}>{sleepData.waketime}</div>}
+            {display.waketime && <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2 }}>{display.waketime}</div>}
           </div>
         </div>
 
         {/* Duration display */}
-        {sleepData?.duration != null && (
+        {display.duration != null && (
           <div style={{ textAlign: 'center', marginBottom: 16 }}>
-            <span style={{ fontFamily: 'Lora, serif', fontSize: 28, color: 'var(--accent)' }}>{fmtDuration(sleepData.duration)}</span>
+            <span style={{ fontFamily: 'Lora, serif', fontSize: 28, color: 'var(--accent)' }}>{fmtDuration(display.duration)}</span>
             {habit.goal && (
-              <span style={{ fontSize: 11, color: sleepData.duration >= habit.goal ? 'var(--accent)' : 'var(--t3)', marginLeft: 8 }}>
-                {sleepData.duration >= habit.goal ? '✓ meta' : `meta: ${fmtDuration(habit.goal)}`}
+              <span style={{ fontSize: 11, color: display.duration >= habit.goal ? 'var(--accent)' : 'var(--t3)', marginLeft: 8 }}>
+                {display.duration >= habit.goal ? '✓ meta' : `meta: ${fmtDuration(habit.goal)}`}
               </span>
             )}
           </div>
@@ -147,7 +164,7 @@ function SleepSheet({ habit, dayKey, sleepData, onClose }) {
           type="time"
           value={timeVal || defaultTime}
           onChange={e => setTimeVal(e.target.value)}
-          style={{ display: 'block', width: '100%', background: 'var(--bg2)', border: `0.5px solid var(--accent)`, borderRadius: 12, padding: '16px 8px', fontSize: 32, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: 'var(--accent)', textAlign: 'center', outline: 'none', marginBottom: 16, colorScheme: 'dark' }}
+          style={{ display: 'block', width: '100%', background: 'var(--bg2)', border: '0.5px solid var(--accent)', borderRadius: 12, padding: '16px 8px', fontSize: 32, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: 'var(--accent)', textAlign: 'center', outline: 'none', marginBottom: 16, colorScheme: 'dark' }}
         />
 
         {isBedMode && (
@@ -352,7 +369,8 @@ function ManageModal({ habits, onAdd, onEdit, onReorder, onClose }) {
 }
 
 // ── Sleep row in habit list ───────────────────────────────────────────────────
-function SleepRow({ habit, dayKey, onTap }) {
+function SleepRow({ habit, dayKey, sleepVersion, onTap }) {
+  void sleepVersion // ensures re-render when parent bumps version
   const sleepData = getSleepData(dayKey)
   const hasBed = !!sleepData?.bedtime
   const hasWake = !!sleepData?.waketime
@@ -400,6 +418,7 @@ export default function Today() {
   const [quantValues, setQuantValues] = useState(() => loadData('habits-quant-' + key, {}))
   const [sleepSheet, setSleepSheet] = useState(null) // habit object
   const [quantInput, setQuantInput] = useState(null)
+  const [sleepVersion, setSleepVersion] = useState(0) // bump to force sleep re-read
 
   // Snapshot on open
   useState(() => {
@@ -420,10 +439,12 @@ export default function Today() {
   const sleepHabits = habits.filter(h => h.type === 'sleep')
 
   function isSleepDone(habit) {
+    // sleepVersion in deps ensures this re-evaluates after onSaved() bump
+    void sleepVersion
     const d = getSleepData(key)
     if (!d?.duration) return false
     if (habit.goal) return d.duration >= habit.goal
-    return !!d.waketime // free sleep: done when wake logged
+    return !!d.waketime
   }
 
   function isQuantDone(habit) {
@@ -571,7 +592,7 @@ export default function Today() {
           <div style={{ paddingTop: 8 }}>
             <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--t3)', padding: '8px 0 4px' }}>Sueño</div>
             {sleepHabits.map(habit => (
-              <SleepRow key={habit.id} habit={habit} dayKey={key} onTap={() => setSleepSheet(habit)} />
+              <SleepRow key={habit.id} habit={habit} dayKey={key} sleepVersion={sleepVersion} onTap={() => setSleepSheet(habit)} />
             ))}
           </div>
         )}
@@ -647,7 +668,7 @@ export default function Today() {
         <HabitModal habit={editingHabit} onSave={editHabit} onDelete={() => deleteHabit(editingHabit.id)} onClose={() => setEditingHabit(null)} />
       )}
       {sleepSheet && (
-        <SleepSheet habit={sleepSheet} dayKey={key} sleepData={getSleepData(key)} onClose={() => setSleepSheet(null)} />
+        <SleepSheet habit={sleepSheet} dayKey={key} onSaved={() => setSleepVersion(v => v + 1)} onClose={() => setSleepSheet(null)} />
       )}
       {quantInput && (
         <QuantInputModal habit={quantInput} currentValue={quantValues[quantInput.id] ?? null} onSave={val => saveQuantValue(quantInput.id, val)} onClose={() => setQuantInput(null)} />
