@@ -420,11 +420,13 @@ export default function Today() {
   const [quantInput, setQuantInput] = useState(null)
   const [sleepVersion, setSleepVersion] = useState(0) // bump to force sleep re-read
 
-  // Snapshot on open
-  useState(() => {
+  // Snapshot on open — useRef so it runs exactly once, not on every render
+  const snapshotDone = useRef(false)
+  if (!snapshotDone.current) {
+    snapshotDone.current = true
     const h = getHabits()
     if (h.length > 0) saveData('habits-snapshot-' + key, h.map(h => ({ id: h.id, name: h.name, icon: h.icon })))
-  })
+  }
 
   const [showManage, setShowManage] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
@@ -471,7 +473,18 @@ export default function Today() {
       const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
       saveData('habits-' + key, next)
       saveData('habits-snapshot-' + key, habits.map(h => ({ id: h.id, name: h.name, icon: h.icon })))
-      const newDone = next.length + quantDone + sleepDone
+      // Read quant/sleep fresh from localStorage to avoid stale closure values
+      const freshQuant = loadData('habits-quant-' + key, {})
+      const freshQuantDone = quantHabits.filter(h => {
+        const v = freshQuant[h.id]
+        return h.type === 'count' && v != null && v >= (h.goal || 1)
+      }).length
+      const freshSleepDone = sleepHabits.filter(h => {
+        const sd = loadData('sleep-' + key, null)
+        if (!sd?.duration) return false
+        return h.goal ? sd.duration >= h.goal : !!sd.waketime
+      }).length
+      const newDone = next.length + freshQuantDone + freshSleepDone
       if (newDone === total && total > 0) triggerConfetti()
       return next
     })

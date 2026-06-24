@@ -15,18 +15,16 @@ function pad(n) { return String(n).padStart(2, '0') }
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r }
 function toKey(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) }
 
-const TODAY = new Date()
-
 // ── Bool helpers ─────────────────────────────────────────────────────────────
 function computeBoolStreak(habitId) {
   let current = 0, record = 0, tmp = 0
   for (let i = 0; i < 90; i++) {
-    const ids = loadData('habits-' + toKey(addDays(TODAY, -i)), [])
+    const ids = loadData('habits-' + toKey(addDays(new Date(), -i)), [])
     if (ids.includes(habitId)) current++
     else break
   }
   for (let i = 89; i >= 0; i--) {
-    const ids = loadData('habits-' + toKey(addDays(TODAY, -i)), [])
+    const ids = loadData('habits-' + toKey(addDays(new Date(), -i)), [])
     if (ids.includes(habitId)) { tmp++; record = Math.max(record, tmp) }
     else tmp = 0
   }
@@ -36,7 +34,7 @@ function computeBoolStreak(habitId) {
 function computeBoolCompletion(habitId, range) {
   let done = 0
   for (let i = 0; i < range; i++) {
-    const ids = loadData('habits-' + toKey(addDays(TODAY, -i)), [])
+    const ids = loadData('habits-' + toKey(addDays(new Date(), -i)), [])
     if (ids.includes(habitId)) done++
   }
   return Math.round((done / range) * 100)
@@ -47,13 +45,13 @@ function computeCountStats(habitId, goal, range) {
   let daysLogged = 0, daysHit = 0, sum = 0, streak = 0, streakActive = true
   let record = 0, tmp = 0
   for (let i = 0; i < range; i++) {
-    const quant = loadData('habits-quant-' + toKey(addDays(TODAY, -i)), {})
+    const quant = loadData('habits-quant-' + toKey(addDays(new Date(), -i)), {})
     const val = quant[habitId]
     if (val != null) { daysLogged++; sum += val; if (val >= goal) { daysHit++ } }
     if (streakActive) { if (val != null && val >= goal) streak++; else streakActive = false }
   }
   for (let i = range - 1; i >= 0; i--) {
-    const quant = loadData('habits-quant-' + toKey(addDays(TODAY, -i)), {})
+    const quant = loadData('habits-quant-' + toKey(addDays(new Date(), -i)), {})
     const val = quant[habitId]
     if (val != null && val >= goal) { tmp++; record = Math.max(record, tmp) } else tmp = 0
   }
@@ -65,7 +63,7 @@ function computeCountStats(habitId, goal, range) {
 function getCountHistory(habitId, range) {
   const pts = []
   for (let i = range - 1; i >= 0; i--) {
-    const key = toKey(addDays(TODAY, -i))
+    const key = toKey(addDays(new Date(), -i))
     const quant = loadData('habits-quant-' + key, {})
     const val = quant[habitId]
     if (val != null) pts.push({ key, val })
@@ -77,7 +75,7 @@ function getCountHistory(habitId, range) {
 function computeFreeStats(habitId, range) {
   let total = 0, count = 0, max = 0
   for (let i = 0; i < range; i++) {
-    const quant = loadData('habits-quant-' + toKey(addDays(TODAY, -i)), {})
+    const quant = loadData('habits-quant-' + toKey(addDays(new Date(), -i)), {})
     const val = quant[habitId]
     if (val != null) { total += val; count++; if (val > max) max = val }
   }
@@ -88,7 +86,7 @@ function computeFreeStats(habitId, range) {
 function getFreeHistory(habitId, range) {
   const pts = []
   for (let i = range - 1; i >= 0; i--) {
-    const key = toKey(addDays(TODAY, -i))
+    const key = toKey(addDays(new Date(), -i))
     const quant = loadData('habits-quant-' + key, {})
     const val = quant[habitId]
     if (val != null) pts.push({ key, val })
@@ -100,7 +98,7 @@ function getFreeHistory(habitId, range) {
 function getGymWeights(exercise) {
   const points = []
   for (let i = 89; i >= 0; i--) {
-    const key = toKey(addDays(TODAY, -i))
+    const key = toKey(addDays(new Date(), -i))
     const gymData = loadData('gym-' + key, null)
     if (!gymData) continue
     Object.values(gymData).forEach(session => {
@@ -119,8 +117,44 @@ function getGymWeights(exercise) {
   return Object.entries(byDay).map(([date, weight]) => ({ date, weight })).sort((a, b) => a.date.localeCompare(b.date))
 }
 
+// ── Sleep helpers ─────────────────────────────────────────────────────────────
+function computeSleepStats(goal, range) {
+  const today = new Date()
+  let count = 0, totalHours = 0, metGoal = 0, maxH = 0
+  for (let i = 0; i < range; i++) {
+    const key = toKey(addDays(today, -i))
+    const sd = loadData('sleep-' + key, null)
+    if (sd?.duration != null) {
+      count++
+      totalHours += sd.duration
+      if (sd.duration > maxH) maxH = sd.duration
+      if (goal != null && sd.duration >= goal) metGoal++
+    }
+  }
+  const avg = count > 0 ? Math.round((totalHours / count) * 10) / 10 : null
+  return { count, avg, max: Math.round(maxH * 10) / 10, metGoal }
+}
+
+function getSleepHistory(range) {
+  const today = new Date()
+  const pts = []
+  for (let i = range - 1; i >= 0; i--) {
+    const key = toKey(addDays(today, -i))
+    const sd = loadData('sleep-' + key, null)
+    if (sd?.duration != null) pts.push({ key, val: sd.duration })
+  }
+  return pts
+}
+
+function fmtH(hours) {
+  if (hours == null) return '—'
+  const h = Math.floor(hours)
+  const m = Math.round((hours - h) * 60)
+  return m > 0 ? `${h}h ${m}m` : `${h}h`
+}
+
 // ── Mini sparkline ────────────────────────────────────────────────────────────
-function Sparkline({ points, goal }) {
+function Sparkline({ points, goal, uid = "sg" }) {
   if (points.length < 2) return (
     <div style={{ fontSize: 10, color: 'var(--t3)', fontStyle: 'italic' }}>Sin datos</div>
   )
@@ -137,12 +171,12 @@ function Sparkline({ points, goal }) {
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}>
       <defs>
-        <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={uid} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.18" />
           <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path d={area} fill="url(#sg)" />
+      <path d={area} fill={`url(#${uid})`} />
       {goalY != null && goalY >= 0 && goalY <= H && (
         <line x1="4" y1={goalY} x2={W-4} y2={goalY} stroke="var(--accent)" strokeWidth="0.5" strokeDasharray="3,3" opacity="0.5" />
       )}
@@ -212,6 +246,7 @@ function HabitCard({ habit, range, isOpen, onToggle }) {
   const isBool = !habit.type || habit.type === 'bool'
   const isCount = habit.type === 'count'
   const isFree = habit.type === 'free'
+  const isSleep = habit.type === 'sleep'
   const unitLabel = habit.unit || ''
 
   // Bool stats
@@ -226,6 +261,10 @@ function HabitCard({ habit, range, isOpen, onToggle }) {
   const freeStats = isFree ? computeFreeStats(habit.id, range) : null
   const freeHistory = isFree && isOpen ? getFreeHistory(habit.id, range) : []
 
+  // Sleep stats
+  const sleepStats = isSleep ? computeSleepStats(habit.goal ?? null, range) : null
+  const sleepHistory = isSleep && isOpen ? getSleepHistory(range) : []
+
   // Subtitle shown in collapsed header
   function subtitle() {
     if (isBool) return `${boolPct}% · racha ${boolStats.current}`
@@ -236,6 +275,11 @@ function HabitCard({ habit, range, isOpen, onToggle }) {
     if (isFree) {
       if (freeStats.count === 0) return 'sin registros'
       return `${freeStats.total}${unitLabel ? ' ' + unitLabel : ''} total · ⌀ ${freeStats.avg ?? '—'}`
+    }
+    if (isSleep) {
+      if (sleepStats.count === 0) return 'sin registros'
+      const goalStr = habit.goal ? ` · meta: ${fmtH(habit.goal)}` : ''
+      return `⌀ ${fmtH(sleepStats.avg)} · ${sleepStats.count} noches${goalStr}`
     }
     return ''
   }
@@ -281,7 +325,7 @@ function HabitCard({ habit, range, isOpen, onToggle }) {
                 <StatCell value={countStats.streak} label="Racha meta" />
               </div>
               {countHistory.length >= 2 && (
-                <Sparkline points={countHistory} goal={habit.goal} />
+                <Sparkline points={countHistory} goal={habit.goal} uid={`sg-count-${habit.id}`} />
               )}
               {countHistory.length < 2 && (
                 <div style={{ fontSize: 10, color: 'var(--t3)', fontStyle: 'italic', textAlign: 'center', padding: '6px 0' }}>Registra más días para ver la gráfica</div>
@@ -297,10 +341,37 @@ function HabitCard({ habit, range, isOpen, onToggle }) {
                 <StatCell value={freeStats.max > 0 ? freeStats.max : '—'} label="Máximo" />
               </div>
               {freeHistory.length >= 2 && (
-                <Sparkline points={freeHistory} />
+                <Sparkline points={freeHistory} uid={`sg-free-${habit.id}`} />
               )}
               {freeHistory.length < 2 && (
                 <div style={{ fontSize: 10, color: 'var(--t3)', fontStyle: 'italic', textAlign: 'center', padding: '6px 0' }}>Registra más días para ver la gráfica</div>
+              )}
+            </>
+          )}
+
+          {isSleep && (
+            <>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                <StatCell value={fmtH(sleepStats.avg)} label="Media" accent />
+                <StatCell value={fmtH(sleepStats.max)} label="Máximo" />
+                <StatCell value={`${sleepStats.count}n`} label={`Últ. ${range}d`} />
+              </div>
+              {habit.goal && sleepStats.count > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--t3)', marginBottom: 4 }}>
+                    <span>Noches cumpliendo meta ({fmtH(habit.goal)})</span>
+                    <span style={{ color: 'var(--accent)' }}>{Math.round(sleepStats.metGoal / sleepStats.count * 100)}%</span>
+                  </div>
+                  <div style={{ height: 4, background: 'var(--line2)', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', borderRadius: 3, width: `${Math.round(sleepStats.metGoal / sleepStats.count * 100)}%`, background: 'var(--accent)', transition: 'width 0.4s ease' }} />
+                  </div>
+                </div>
+              )}
+              {sleepHistory.length >= 2 && (
+                <Sparkline points={sleepHistory} goal={habit.goal} uid={`sg-sleep-${habit.id}`} />
+              )}
+              {sleepHistory.length < 2 && (
+                <div style={{ fontSize: 10, color: 'var(--t3)', fontStyle: 'italic', textAlign: 'center', padding: '6px 0' }}>Registra más noches para ver la gráfica</div>
               )}
             </>
           )}

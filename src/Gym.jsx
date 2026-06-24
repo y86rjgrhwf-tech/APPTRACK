@@ -97,7 +97,6 @@ function WeightConverter() {
   const converted = val ? (unit === 'kg' ? +(parseFloat(val) * 2.20462).toFixed(1) : +(parseFloat(val) / 2.20462).toFixed(1)) : ''
 
   function switchUnit(u) {
-    import('./store').then(m => m.setUnit(u))
     setUnit(u); setUnitState(u)
   }
 
@@ -336,7 +335,12 @@ export default function Gym() {
   const key = todayKey()
   const unit = getUnit()
   const [workoutDays, setWorkoutDays] = useState(() => loadData('gym-days', null))
-  const [activeTab, setActiveTab] = useState(() => loadData('gym-active-tab', 0))
+  const [activeTab, setActiveTab] = useState(() => {
+    const saved = loadData('gym-active-tab', 0)
+    const days = loadData('gym-days', null)
+    if (!days || days.length === 0) return 0
+    return Math.min(saved, days.length - 1)
+  })
   const [sessions, setSessions] = useState(() => loadData('gym-' + key, null))
   const [saved, setSaved] = useState(() => loadData('gym-saved-' + key, false))
   const [activeSheet, setActiveSheet] = useState(null)
@@ -366,7 +370,8 @@ export default function Gym() {
 
   function getSession() {
     if (!workoutDays) return []
-    const day = workoutDays[activeTab]
+    const day = workoutDays[Math.min(activeTab, workoutDays.length - 1)]
+    if (!day) return []
     if (!sessions || !sessions[day.id]) return emptySession(day.exercises)
     return sessions[day.id]
   }
@@ -424,7 +429,8 @@ export default function Gym() {
   if (!workoutDays) return <Onboarding onDone={initWorkout} />
 
   const session = getSession() || []
-  const currentDay = workoutDays[activeTab] || workoutDays[0]
+  const safeTab = Math.min(activeTab, workoutDays.length - 1)
+  const currentDay = workoutDays[safeTab] || workoutDays[0]
   const allSets = session.flatMap(ex => ex.sets)
   const doneSets = allSets.filter(s => s.done).length
 

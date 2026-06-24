@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { loadData, saveData, getHabits } from './store'
 
 const DAYS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado']
@@ -127,13 +127,10 @@ export default function History() {
   const selDate = new Date(selectedKey + 'T12:00:00')
   const [checkedIds, setCheckedIds] = useState(() => loadData('habits-' + selectedKey, []))
 
-  // Reload checkedIds when selectedKey changes
-  const prevKeyRef = useRef(selectedKey)
-  if (prevKeyRef.current !== selectedKey) {
-    prevKeyRef.current = selectedKey
-    const fresh = loadData('habits-' + selectedKey, [])
-    if (JSON.stringify(fresh) !== JSON.stringify(checkedIds)) setCheckedIds(fresh)
-  }
+  // Reload checkedIds when selectedKey changes — must be useEffect, not inline render mutation
+  useEffect(() => {
+    setCheckedIds(loadData('habits-' + selectedKey, []))
+  }, [selectedKey])
 
   const done = habits.filter(h => checkedIds.includes(h.id)).length
   const total = habits.length
@@ -261,7 +258,20 @@ export default function History() {
         {total > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', padding: '8px 0 20px' }}>
             {habits.map(habit => {
-              const isDone = checkedIds.includes(habit.id)
+              let isDone = false
+              if (!habit.type || habit.type === 'bool') {
+                isDone = checkedIds.includes(habit.id)
+              } else if (habit.type === 'count') {
+                const quant = loadData('habits-quant-' + selectedKey, {})
+                const val = quant[habit.id]
+                isDone = val != null && val >= (habit.goal || 1)
+              } else if (habit.type === 'free') {
+                const quant = loadData('habits-quant-' + selectedKey, {})
+                isDone = quant[habit.id] != null
+              } else if (habit.type === 'sleep') {
+                const sd = loadData('sleep-' + selectedKey, null)
+                isDone = habit.goal ? (sd?.duration != null && sd.duration >= habit.goal) : !!sd?.waketime
+              }
               return (
                 <div key={habit.id} style={{ width: 48, height: 48, borderRadius: 14, background: isDone ? 'var(--abg)' : 'rgba(255,255,255,0.03)', border: `0.5px solid ${isDone ? 'var(--adim)' : 'var(--line)'}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, boxShadow: isDone ? '0 0 12px var(--adim)' : 'none' }}>
                   <i className={`ti ${habit.icon}`} style={{ fontSize: 18, color: isDone ? 'var(--accent)' : 'var(--t3)' }} />
