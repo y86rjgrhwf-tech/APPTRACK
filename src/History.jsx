@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { loadData, saveData, getHabits } from './store'
+import { loadData, saveData, getHabits, getSleepData, saveSleepBedtime, saveSleepWaketime, clearSleepField, fmtDuration } from './store'
 
 const DAYS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado']
 const D7 = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
@@ -17,7 +17,7 @@ function scoreColor(ratio) {
   return `rgba(168,255,62,${0.7 + (ratio - 0.5) * 0.6})`
 }
 
-// ── Habit edit panel (only for yesterday) ────────────────────────────────────
+// ── Habit edit panel ──────────────────────────────────────────────────────────
 function HabitEditPanel({ habits, selectedKey, onClose }) {
   const [checkedIds, setCheckedIds] = useState(() => loadData('habits-' + selectedKey, []))
 
@@ -61,6 +61,151 @@ function HabitEditPanel({ habits, selectedKey, onClose }) {
   )
 }
 
+// ── Sleep edit sheet — for past days ─────────────────────────────────────────
+function SleepEditSheet({ dayKey, habit, onClose, onChanged }) {
+  // In the new model all fields for a night live on the bedDay key (the night's start date).
+  // For past days this is always dayKey. For today it's also dayKey (bedtime tonight → today).
+  const [version, setVersion] = useState(0)
+  function refresh() { setVersion(v => v + 1); onChanged() }
+
+  const data = getSleepData(dayKey) || {}
+  const bedtime  = data.bedtime  || null
+  const waketime = data.waketime || null
+  let duration = data.duration ?? null
+  if (duration == null && bedtime && waketime) {
+    const [bh, bm] = bedtime.split(':').map(Number)
+    const [wh, wm] = waketime.split(':').map(Number)
+    let mins = (wh * 60 + wm) - (bh * 60 + bm)
+    if (mins < 0) mins += 24 * 60
+    if (mins < 24 * 60) duration = Math.round(mins / 60 * 10) / 10
+  }
+
+  const hasBed = !!bedtime
+  const hasWake = !!waketime
+  const hasDuration = duration != null
+  const metGoal = hasDuration && habit?.goal != null && duration >= habit.goal
+
+  const now = new Date()
+  const defaultTime = pad(now.getHours()) + ':' + pad(now.getMinutes())
+
+  const [editingField, setEditingField] = useState(null)
+  const [timeVal, setTimeVal] = useState('')
+
+  function openField(field) {
+    setTimeVal(field === 'bedtime' ? (bedtime || defaultTime) : (waketime || defaultTime))
+    setEditingField(field)
+  }
+
+  function saveField() {
+    if (editingField === 'bedtime') saveSleepBedtime(timeVal, dayKey)
+    else saveSleepWaketime(dayKey, timeVal)
+    setEditingField(null)
+    refresh()
+  }
+
+  function clearField(field) {
+    clearSleepField(dayKey, field)
+    refresh()
+  }
+
+  const date = new Date(dayKey + 'T12:00:00')
+  const dateLabel = DAYS[date.getDay()] + ' ' + date.getDate() + ' de ' + MONTHS[date.getMonth()]
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 430, margin: '0 auto', background: 'var(--bg1)', borderRadius: '20px 20px 0 0', borderTop: '0.5px solid var(--line)', padding: '20px 20px 40px' }}>
+        <div style={{ width: 36, height: 3, background: 'var(--line)', borderRadius: 2, margin: '0 auto 20px' }} />
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+          <i className="ti ti-moon" style={{ fontSize: 18, color: 'var(--accent)' }} />
+          <div style={{ fontFamily: 'Lora, serif', fontSize: 18, color: 'var(--t1)' }}>{habit?.name || 'Sueño'}</div>
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 20 }}>{dateLabel}</div>
+
+        {/* Duration display */}
+        {hasDuration && (
+          <div style={{ textAlign: 'center', marginBottom: 16, padding: '12px', background: metGoal ? 'rgba(58,122,42,0.1)' : 'var(--abg)', borderRadius: 12, border: `0.5px solid ${metGoal ? 'rgba(58,122,42,0.3)' : 'var(--adim)'}` }}>
+            <div style={{ fontFamily: 'DM Sans, sans-serif', fontSize: 32, fontWeight: 700, color: metGoal ? 'var(--green)' : 'var(--accent)', lineHeight: 1 }}>
+              {fmtDuration(duration)}
+            </div>
+            {habit?.goal && (
+              <div style={{ fontSize: 11, color: metGoal ? 'var(--green)' : 'var(--t3)', marginTop: 4 }}>
+                {metGoal ? 'Meta alcanzada ✓' : `Meta: ${fmtDuration(habit.goal)}`}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* If editing a field inline */}
+        {editingField && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center', marginBottom: 8 }}>
+              {editingField === 'bedtime' ? 'Hora de dormir' : 'Hora de despertar'}
+            </div>
+            <input
+              type="time" value={timeVal} onChange={e => setTimeVal(e.target.value)} autoFocus
+              style={{ display: 'block', width: '100%', background: 'var(--bg2)', border: '0.5px solid var(--accent)', borderRadius: 12, padding: '14px 8px', fontSize: 30, fontFamily: 'DM Sans, sans-serif', fontWeight: 600, color: 'var(--accent)', textAlign: 'center', outline: 'none', marginBottom: 10, colorScheme: 'dark' }}
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setEditingField(null)} style={{ flex: 1, padding: 12, borderRadius: 10, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t3)', fontFamily: 'DM Sans, sans-serif', fontSize: 13, cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={saveField} style={{ flex: 2, padding: 12, borderRadius: 10, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Guardar</button>
+            </div>
+          </div>
+        )}
+
+        {/* Field rows */}
+        {!editingField && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            {/* Bedtime row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: hasBed ? 'var(--abg)' : 'var(--bg2)', border: `0.5px solid ${hasBed ? 'var(--adim)' : 'var(--line)'}`, borderRadius: 12 }}>
+              <i className="ti ti-moon" style={{ fontSize: 16, color: hasBed ? 'var(--accent)' : 'var(--t3)', flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Hora de dormir</div>
+                <div style={{ fontFamily: 'DM Sans, sans-serif', fontSize: 16, fontWeight: 600, color: hasBed ? 'var(--accent)' : 'var(--t3)' }}>{bedtime || '—'}</div>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => openField('bedtime')} style={{ padding: '6px 10px', borderRadius: 8, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t2)', fontSize: 11, fontFamily: 'DM Sans, sans-serif', cursor: 'pointer' }}>
+                  {hasBed ? 'Editar' : '+ Añadir'}
+                </button>
+                {hasBed && (
+                  <button onClick={() => clearField('bedtime')} style={{ padding: '6px 8px', borderRadius: 8, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t3)', fontSize: 12, cursor: 'pointer' }}>
+                    <i className="ti ti-x" style={{ fontSize: 12 }} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Waketime row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: hasWake ? 'var(--abg)' : 'var(--bg2)', border: `0.5px solid ${hasWake ? 'var(--adim)' : 'var(--line)'}`, borderRadius: 12 }}>
+              <i className="ti ti-sun" style={{ fontSize: 16, color: hasWake ? 'var(--accent)' : 'var(--t3)', flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Hora de despertar</div>
+                <div style={{ fontFamily: 'DM Sans, sans-serif', fontSize: 16, fontWeight: 600, color: hasWake ? 'var(--accent)' : 'var(--t3)' }}>{waketime || '—'}</div>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => openField('waketime')} style={{ padding: '6px 10px', borderRadius: 8, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t2)', fontSize: 11, fontFamily: 'DM Sans, sans-serif', cursor: 'pointer' }}>
+                  {hasWake ? 'Editar' : '+ Añadir'}
+                </button>
+                {hasWake && (
+                  <button onClick={() => clearField('waketime')} style={{ padding: '6px 8px', borderRadius: 8, border: '0.5px solid var(--line)', background: 'transparent', color: 'var(--t3)', fontSize: 12, cursor: 'pointer' }}>
+                    <i className="ti ti-x" style={{ fontSize: 12 }} />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!editingField && (
+          <button onClick={onClose} style={{ width: '100%', padding: 12, borderRadius: 10, border: 'none', background: 'var(--accent)', color: 'var(--fg)', fontFamily: 'DM Sans, sans-serif', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}>
+            Listo
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function History() {
   const today = new Date()
   const todayKey = toKey(today)
@@ -70,6 +215,8 @@ export default function History() {
   const [selectedKey, setSelectedKey] = useState(todayKey)
   const [gymOpen, setGymOpen] = useState(false)
   const [editingHabits, setEditingHabits] = useState(false)
+  const [editingSleep, setEditingSleep] = useState(false)
+  const [sleepVersion, setSleepVersion] = useState(0)
   const touchStartX = useRef(0)
   const mouseStartX = useRef(0)
   const mouseDown = useRef(false)
@@ -79,9 +226,19 @@ export default function History() {
     return snapshot || getHabits()
   })()
 
-  // Only yesterday is editable
+  const allHabits = getHabits()
+  // Bug #8 fix: sleep habit only shown if it existed on the selected day (via snapshot).
+  // Re-fetch full habit object from current allHabits to get up-to-date goal/config.
+  const sleepHabits = habits
+    .filter(h => h.type === 'sleep')
+    .map(sh => allHabits.find(h => h.id === sh.id) || sh)
+
   const isYesterday = selectedKey === yesterdayKey
   const isToday = selectedKey === todayKey
+  // Sleep is editable for any past day (not future)
+  const selDate = new Date(selectedKey + 'T12:00:00')
+  const isFutureDay = selDate > today
+  const isSleepEditable = !isFutureDay
 
   function getWeekDays() {
     const base = startOfWeek(addDays(today, weekOffset * 7))
@@ -124,10 +281,8 @@ export default function History() {
     ? base.getDate() + ' – ' + end.getDate() + ' ' + MS[base.getMonth()]
     : base.getDate() + ' ' + MS[base.getMonth()] + ' – ' + end.getDate() + ' ' + MS[end.getMonth()]
 
-  const selDate = new Date(selectedKey + 'T12:00:00')
   const [checkedIds, setCheckedIds] = useState(() => loadData('habits-' + selectedKey, []))
 
-  // Reload checkedIds when selectedKey changes — must be useEffect, not inline render mutation
   useEffect(() => {
     setCheckedIds(loadData('habits-' + selectedKey, []))
   }, [selectedKey])
@@ -148,15 +303,28 @@ export default function History() {
     ? Object.keys(gymData).find(k => getExercises(gymData[k]).some(ex => ex.sets?.some(s => s.done)))
     : null
 
+  // Sleep data for selected day — in the new model all fields live on selectedKey
+  const sleepData = getSleepData(selectedKey) || {}
+  const hasSleepData = !!(sleepData.bedtime || sleepData.waketime)
+  const sleepHabit = sleepHabits[0] || null
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-      {/* Habit edit panel */}
       {editingHabits && (
         <HabitEditPanel
           habits={habits}
           selectedKey={selectedKey}
           onClose={() => { setEditingHabits(false); setCheckedIds(loadData('habits-' + selectedKey, [])) }}
+        />
+      )}
+
+      {editingSleep && sleepHabit && (
+        <SleepEditSheet
+          dayKey={selectedKey}
+          habit={sleepHabit}
+          onClose={() => setEditingSleep(false)}
+          onChanged={() => setSleepVersion(v => v + 1)}
         />
       )}
 
@@ -243,7 +411,6 @@ export default function History() {
           <div style={{ fontSize: 11, color: done === total && total > 0 ? 'var(--accent)' : 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
             {total === 0 ? 'Sin hábitos definidos' : done === total ? '¡Día perfecto!' : `${done} de ${total} hábitos`}
           </div>
-          {/* Edit button — only yesterday */}
           {isYesterday && total > 0 && (
             <div
               onClick={() => setEditingHabits(true)}
@@ -269,7 +436,8 @@ export default function History() {
                 const quant = loadData('habits-quant-' + selectedKey, {})
                 isDone = quant[habit.id] != null
               } else if (habit.type === 'sleep') {
-                const sd = loadData('sleep-' + selectedKey, null)
+                void sleepVersion
+                const sd = getSleepData(selectedKey)
                 isDone = habit.goal ? (sd?.duration != null && sd.duration >= habit.goal) : !!sd?.waketime
               }
               return (
@@ -278,6 +446,51 @@ export default function History() {
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {/* Sleep block for this day — always editable for past days */}
+        {sleepHabit && isSleepEditable && (
+          <div style={{ borderTop: '0.5px solid var(--line2)', paddingTop: 12, marginBottom: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <i className="ti ti-moon" style={{ fontSize: 14, color: 'var(--t3)' }} />
+                <span style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Sueño</span>
+              </div>
+              <div
+                onClick={() => setEditingSleep(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 7, border: '0.5px solid var(--line)', background: 'var(--bg1)', cursor: 'pointer', fontSize: 11, color: 'var(--t2)', fontFamily: 'DM Sans, sans-serif' }}
+              >
+                <i className="ti ti-pencil" style={{ fontSize: 12 }} /> {hasSleepData ? 'Editar' : 'Añadir'}
+              </div>
+            </div>
+
+            {hasSleepData ? (
+              <div style={{ display: 'flex', gap: 8 }}>
+                {sleepData.bedtime && (
+                  <div style={{ flex: 1, padding: '10px 12px', background: 'var(--bg1)', border: '0.5px solid var(--line)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Dormido</div>
+                    <div style={{ fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, color: 'var(--accent)' }}>{sleepData.bedtime}</div>
+                  </div>
+                )}
+                {sleepData.waketime && (
+                  <div style={{ flex: 1, padding: '10px 12px', background: 'var(--bg1)', border: '0.5px solid var(--line)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Despertado</div>
+                    <div style={{ fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, color: 'var(--accent)' }}>{sleepData.waketime}</div>
+                  </div>
+                )}
+                {sleepData.duration != null && (
+                  <div style={{ flex: 1, padding: '10px 12px', background: 'var(--abg)', border: '0.5px solid var(--adim)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Duración</div>
+                    <div style={{ fontFamily: 'DM Sans, sans-serif', fontSize: 15, fontWeight: 600, color: 'var(--accent)' }}>{fmtDuration(sleepData.duration)}</div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ padding: '12px 0', fontSize: 12, color: 'var(--t3)', fontStyle: 'italic', fontFamily: 'Lora, serif' }}>
+                Sin registro de sueño para este día
+              </div>
+            )}
           </div>
         )}
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { loadData, getHabits, getUnit } from './store'
+import { loadData, getHabits, getUnit, getSleepData } from './store'
 
 function getGymExercises() {
   const days = loadData('gym-days', null)
@@ -123,7 +123,7 @@ function computeSleepStats(goal, range) {
   let count = 0, totalHours = 0, metGoal = 0, maxH = 0
   for (let i = 0; i < range; i++) {
     const key = toKey(addDays(today, -i))
-    const sd = loadData('sleep-' + key, null)
+    const sd = getSleepData(key)
     if (sd?.duration != null) {
       count++
       totalHours += sd.duration
@@ -140,7 +140,7 @@ function getSleepHistory(range) {
   const pts = []
   for (let i = range - 1; i >= 0; i--) {
     const key = toKey(addDays(today, -i))
-    const sd = loadData('sleep-' + key, null)
+    const sd = getSleepData(key)
     if (sd?.duration != null) pts.push({ key, val: sd.duration })
   }
   return pts
